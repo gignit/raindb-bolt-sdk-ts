@@ -135,11 +135,19 @@ test('actions.dispatch throws BindingNotInstalled', async () => {
   );
 });
 
-test('tags.tag throws BindingNotInstalled', async () => {
+test('tags.tag throws BindingNotInstalled when ctx.db.tag is missing', async () => {
+  // tags.tag routes through db.tag, which requires ctx.db.tag. The
+  // default mockCtx omits it (simulates a lightning binary older
+  // than phoenix commit eee3eac). The LIVE wrapper guards with
+  // BindingNotInstalled rather than crashing.
   setCtx(mockCtx());
   await assert.rejects(
-    () => tags.tag('f', 's', ['x']),
-    (e: unknown) => e instanceof BindingNotInstalled,
+    () => tags.tag('f', 's', { env: 'prod' }),
+    (e: unknown) => {
+      assert.ok(e instanceof BindingNotInstalled);
+      assert.match((e as Error).message, /ctx\.db\.tag/);
+      return true;
+    },
   );
 });
 

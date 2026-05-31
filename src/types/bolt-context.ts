@@ -39,6 +39,7 @@ import type { FilesBinding } from '../bindings/files.js';
 import type { CatalogBinding } from '../bindings/catalog.js';
 import type { FormationsBinding } from '../bindings/formations.js';
 import type { FlowsBinding } from '../bindings/flows.js';
+import type { ScheduleBinding } from '../bindings/schedule.js';
 
 /**
  * Static metadata about the bolt itself. Surfaced by the goja
@@ -116,12 +117,28 @@ export interface BoltContext {
   readonly sql?: SqlBinding;
   readonly relay?: RelayBinding;
   readonly actions?: ActionsBinding;
+  /**
+   * Type-only namespace -- the substrate does NOT install a
+   * `ctx.tags` namespace today (Wave 2 Tier 2 routed tag mutations
+   * through `ctx.db.tag` / `ctx.db.untag` instead). This field
+   * stays declared optional for backwards-compat with the v0.1
+   * type imports; the SDK's `tags.*` wrappers route through
+   * `db.*`. See `bindings/tags.ts` for the rationale.
+   */
   readonly tags?: TagsBinding;
   readonly vectors?: VectorsBinding;
   readonly files?: FilesBinding;
   readonly catalog?: CatalogBinding;
   readonly formations?: FormationsBinding;
   readonly flows?: FlowsBinding;
+  /**
+   * LIVE since v0.3.0 (substrate Wave 2.5 commit f934956). The
+   * top-level callable enqueues a deferred bolt-callback. Marked
+   * optional for backwards-compat with older lightning binaries
+   * (pre-f934956 substrate did not install this); the wrapper
+   * guards with a clean BindingNotInstalled.
+   */
+  readonly schedule?: ScheduleBinding;
 }
 
 /**

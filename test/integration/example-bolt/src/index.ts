@@ -21,6 +21,10 @@ import { onEchoStream } from './handlers/echo-stream.js';
 import { onObjectRoundtrip } from './handlers/object-roundtrip.js';
 import { onKeysWalk } from './handlers/keys-walk.js';
 import { onSqlProbe } from './handlers/sql-probe.js';
+import { onTagRoundtrip } from './handlers/tag-roundtrip.js';
+import { onExpireDroplet } from './handlers/expire-droplet.js';
+import { onWriteBatch } from './handlers/write-batch.js';
+import { onScheduleCallback } from './handlers/schedule-callback.js';
 
 export async function onHttpRequest(
   ctx: BoltContext,
@@ -56,6 +60,20 @@ export async function onHttpRequest(
   if (req.method === 'GET' && req.path === '/sql-probe') {
     return onSqlProbe(ctx, req);
   }
+  // v0.3.0 -- Tier 2 + Wave 2.5 bindings (substrate commits
+  // eee3eac + f934956).
+  if (req.method === 'POST' && req.path.startsWith('/tag-roundtrip/')) {
+    return onTagRoundtrip(ctx, req);
+  }
+  if (req.method === 'POST' && req.path.startsWith('/expire/')) {
+    return onExpireDroplet(ctx, req);
+  }
+  if (req.method === 'POST' && req.path === '/write-batch') {
+    return onWriteBatch(ctx, req);
+  }
+  if (req.method === 'POST' && req.path === '/schedule') {
+    return onScheduleCallback(ctx, req);
+  }
   return { status: 404, body: { error: 'no route', path: req.path } };
 }
 
@@ -71,4 +89,8 @@ export {
   onObjectRoundtrip,
   onKeysWalk,
   onSqlProbe,
+  onTagRoundtrip,
+  onExpireDroplet,
+  onWriteBatch,
+  onScheduleCallback,
 };
