@@ -1,0 +1,20 @@
+{
+  "name": "@raindb/bolt-sdk-example",
+  "version": "0.0.1",
+  "description": "Smallest complete bolt using @raindb/bolt-sdk. Used as the integration test target.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test:e2e": "node --import tsx --test --test-reporter=spec test/e2e.test.ts"
+  },
+  "dependencies": {
+    "@raindb/bolt-sdk": "file:../../.."
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

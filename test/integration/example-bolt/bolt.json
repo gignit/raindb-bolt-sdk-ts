@@ -1,0 +1,31 @@
+{
+  "id": "bolt-sdk-example",
+  "name": "Bolt SDK example",
+  "description": "Canonical demonstration bolt for @raindb/bolt-sdk. Exercises every LIVE binding wrapper end-to-end.",
+  "runtime": {
+    "engine": "goja",
+    "sourceLanguage": "typescript",
+    "runtimeLanguage": "javascript",
+    "moduleFormat": "esmodule",
+    "sdkVersion": "lightning-sdk/v1",
+    "compatibilityDate": "2026-05-30"
+  },
+  "routes": [
+    { "method": "GET", "path": "/ping", "handler": "onPing" },
+    { "method": "GET", "path": "/agent/:id", "handler": "onReadAgent" },
+    { "method": "POST", "path": "/agent", "handler": "onWriteAgent" },
+    { "method": "GET", "path": "/secret-test", "handler": "onSecretTest" },
+    { "method": "GET", "path": "/echo-stream", "handler": "onEchoStream", "streaming": true }
+  ],
+  "capabilities": {
+    "raindb": {
+      "formations": [
+        { "id": "agent-graph", "ops": ["read", "write", "list"] }
+      ],
+      "secrets": { "names": ["upstream-key", "session-secret"] }
+    },
+    "network": {
+      "egress": ["api.example.com"]
+    }
+  }
+}
