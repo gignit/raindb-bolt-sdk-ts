@@ -8,6 +8,7 @@ export type {
   BulkDropletResult,
   KeyEntry,
   KeyPage,
+  SincePage,
 } from './droplet.js';
 
 export type { Token, WriteTokenOptions } from './token.js';

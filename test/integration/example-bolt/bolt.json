@@ -15,14 +15,21 @@
     { "method": "GET", "path": "/agent/:id", "handler": "onReadAgent" },
     { "method": "POST", "path": "/agent", "handler": "onWriteAgent" },
     { "method": "GET", "path": "/secret-test", "handler": "onSecretTest" },
-    { "method": "GET", "path": "/echo-stream", "handler": "onEchoStream", "streaming": true }
+    { "method": "GET", "path": "/echo-stream", "handler": "onEchoStream", "streaming": true },
+    { "method": "POST", "path": "/object-roundtrip", "handler": "onObjectRoundtrip" },
+    { "method": "GET", "path": "/keys-walk", "handler": "onKeysWalk" },
+    { "method": "GET", "path": "/sql-probe", "handler": "onSqlProbe" }
   ],
   "capabilities": {
     "raindb": {
       "formations": [
         { "id": "agent-graph", "ops": ["read", "write", "list"] }
       ],
-      "secrets": { "names": ["upstream-key", "session-secret"] }
+      "secrets": { "names": ["upstream-key", "session-secret"] },
+      "buckets": [
+        { "name": "tenant-standard", "ops": ["object-read", "object-write"] }
+      ],
+      "sqlRead": true
     },
     "network": {
       "egress": ["api.example.com"]

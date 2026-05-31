@@ -13,16 +13,17 @@
 //      and routes through `setCtx(ctx)` so the call site reads
 //      cleanly without ctx threading.
 //
-// LIVE methods (audit §B; goja installer in
+// LIVE methods (audit §B / §G; goja installer in
 // `pkg/lightning/engines/goja/bindings.go::installDBBinding`):
 //   - readLatest(formationId, indexId, scopeValue)
 //   - readDroplet(formationId, dropletId)
 //   - writeDroplet(formationId, payload)
 //   - listDroplets(formationId, prefix?, pageSize?)
+//   - listKeys(formationId, indexId, opts?)         [LIVE since v0.2.0]
+//   - listSince(formationId, sinceCursor, opts?)    [LIVE since v0.2.0]
 //
 // STUBBED methods (substrate-side pending; per-method JSDoc points
 // at the audit gap card):
-//   - listKeys, listSince (audit §G Gap 2)
 //   - writeBatch (audit §I Gap 4)
 //   - readAt (audit §R Gap 13)
 //   - readCurrent, resolveFormation (audit §S Gap 14)
@@ -35,11 +36,13 @@
 import { resolveCtx } from '../runtime/ctx-resolver.js';
 import { translateBindingError } from '../errors/from-binding.js';
 import { stubOrDispatch } from '../runtime/binding-not-installed.js';
+import { BindingNotInstalled } from '../errors/classes.js';
 import { BINDING } from '../internal/constants.js';
 import type {
   Droplet,
   DropletEnvelope,
   KeyPage,
+  SincePage,
   WriteResult,
   BulkDropletResult,
 } from '../types/droplet.js';
@@ -73,13 +76,23 @@ export interface ListDropletsInput {
 
 export interface ListKeysInput {
   formationId: string;
+  /**
+   * Index name on the formation. Use `by-id-latest` for the
+   * default pointer-by-id index. Required.
+   */
   indexId: string;
   opts?: CursorPaginationOpts;
 }
 
 export interface ListSinceInput {
   formationId: string;
-  sinceCursor?: string;
+  /**
+   * Opaque cursor from a prior `listSince` call's `nextCursor`
+   * field, or the empty string for "from the beginning of the
+   * formation". Required positionally by the substrate, though
+   * empty string is accepted.
+   */
+  sinceCursor: string;
   opts?: CursorPaginationOpts;
 }
 
@@ -139,6 +152,9 @@ export interface ExpirationDaysInput {
  * args, typed errors). This raw type exists so `BoltContext.db` is
  * faithful to what `ctx` actually carries -- direct calls work as an
  * escape hatch.
+ *
+ * Calling conventions are the goja-installed positional ones; the
+ * `db` wrapper repacks named-args inputs into these calls.
  */
 export interface DbBinding {
   // --- LIVE ---
@@ -161,9 +177,24 @@ export interface DbBinding {
     pageSize?: number,
   ): Promise<Droplet[]>;
 
+  // --- LIVE since v0.2.0 (substrate commit af5e9eb) ---
+  // Positional args per the goja installer. opts.first/after for
+  // asc, opts.last/before for desc, plus opts.prefix narrowing.
+  // Methods are typed optional (BoltContext.db is required, but
+  // older lightning binaries may not carry these methods); the
+  // wrapper guards with BindingNotInstalled.
+  listKeys?: (
+    formationId: string,
+    indexId: string,
+    opts?: CursorPaginationOpts,
+  ) => Promise<KeyPage>;
+  listSince?: (
+    formationId: string,
+    sinceCursor: string,
+    opts?: CursorPaginationOpts,
+  ) => Promise<SincePage>;
+
   // --- STUBS (optional methods; substrate may not have shipped them) ---
-  listKeys?: (input: ListKeysInput) => Promise<KeyPage>;
-  listSince?: (input: ListSinceInput) => Promise<KeyPage>;
   writeBatch?: (input: WriteBatchInput) => Promise<WriteBatchResult>;
   readAt?: (input: ReadAtInput) => Promise<Droplet | null>;
   readCurrent?: (input: ReadCurrentInput) => Promise<Droplet | null>;
@@ -179,9 +210,10 @@ export interface DbBinding {
 /**
  * The ctx.db namespace -- ergonomic SDK wrapper.
  *
- * **LIVE**: readLatest, readDroplet, writeDroplet, listDroplets
- * **STUB**: listKeys, listSince, writeBatch, readAt, readCurrent,
- *           resolveFormation, expire, expirationDays
+ * **LIVE**: readLatest, readDroplet, writeDroplet, listDroplets,
+ *           listKeys (since v0.2.0), listSince (since v0.2.0)
+ * **STUB**: writeBatch, readAt, readCurrent, resolveFormation,
+ *           expire, expirationDays
  */
 export const db = {
   /**
@@ -338,35 +370,123 @@ export const db = {
   // ===================================================================
 
   /**
-   * STUB (audit §G Gap 2). Walk an index without reading droplet
-   * payloads -- O(1) firehose primitive for live feeds.
+   * Walk an index without reading droplet payloads -- the O(1)
+   * firehose primitive for live feeds and paginated detail views.
+   *
+   * LIVE since v0.2.0 (audit §G Gap 2; substrate commit af5e9eb).
+   *
+   * Relay-style pagination: pass `opts.first` + `opts.after` to
+   * walk ascending, or `opts.last` + `opts.before` to walk
+   * descending. Mixing the two pairs is a substrate-side error.
+   * Use `opts.prefix` to narrow within the index (only meaningful
+   * for asc walks).
    *
    * @requires capability: `list` on the formation
-   * @throws BindingNotInstalled until substrate ships ctx.db.listKeys
+   * @throws CapabilityDenied
+   * @throws BindingNotInstalled when running against a lightning
+   *   binary that pre-dates phoenix commit af5e9eb
+   *
+   * @example Asc walk with paging
+   * ```ts
+   * let cursor: string | undefined;
+   * for (;;) {
+   *   const page = await db.listKeys({
+   *     formationId: 'broadcast',
+   *     indexId: 'by-id-latest',
+   *     opts: { first: 100, ...(cursor ? { after: cursor } : {}) },
+   *   });
+   *   for (const k of page.keys) await processKey(k);
+   *   if (!page.hasMore) break;
+   *   cursor = page.nextCursor ?? undefined;
+   * }
+   * ```
    */
   async listKeys(input: ListKeysInput): Promise<KeyPage> {
     const ctx = resolveCtx();
-    return stubOrDispatch<KeyPage>(
-      BINDING.db_listKeys,
-      () => ctx.db.listKeys,
-      (fn) => (fn as (i: ListKeysInput) => Promise<KeyPage>)(input),
-      input,
-    );
+    if (typeof ctx.db.listKeys !== 'function') {
+      throw new BindingNotInstalled(
+        `${BINDING.db_listKeys} requires ctx.db.listKeys which is not ` +
+          `installed in this bolt runtime. The @raindb/bolt-sdk wrapper ` +
+          `is LIVE since v0.2.0; the substrate-side binding landed in ` +
+          `phoenix commit af5e9eb. See ` +
+          `~/src/raindb-phoenix-lightning/docs/AUDIT_BOLT_SDK_GAPS.md §G ` +
+          `for the gap card that owns this surface.`,
+        { binding: BINDING.db_listKeys, input },
+      );
+    }
+    try {
+      const out = await ctx.db.listKeys(
+        input.formationId,
+        input.indexId,
+        input.opts ?? {},
+      );
+      return out as KeyPage;
+    } catch (err) {
+      translateBindingError(err, {
+        binding: BINDING.db_listKeys,
+        input,
+      });
+    }
   },
 
   /**
-   * STUB (audit §G Gap 2). Asc-poll-from-cursor live-feed primitive.
+   * Asc-poll-from-cursor over the `by-update` index. The live-feed
+   * primitive: returns the next page of droplets following
+   * `sinceCursor`. Pass empty string for "from the beginning."
    *
-   * @throws BindingNotInstalled until substrate ships ctx.db.listSince
+   * LIVE since v0.2.0 (audit §G Gap 2; substrate commit af5e9eb).
+   *
+   * Unlike {@link listKeys}, this returns FULL droplet payloads
+   * (the substrate's projection is `[]map[string]any` per
+   * `ListSincePage`). Result page is a {@link SincePage}, distinct
+   * from {@link KeyPage}.
+   *
+   * Only asc pagination is meaningful for live feeds; `opts.first`
+   * and `opts.after` are honored. `opts.prefix` is ignored
+   * substrate-side (the by-update index has no scope prefix).
+   *
+   * @requires capability: `list` on the formation
+   * @throws CapabilityDenied
+   * @throws BindingNotInstalled when running against a lightning
+   *   binary that pre-dates phoenix commit af5e9eb
+   *
+   * @example
+   * ```ts
+   * const page = await db.listSince({
+   *   formationId: 'broadcast',
+   *   sinceCursor: lastSeen ?? '',
+   *   opts: { first: 50 },
+   * });
+   * for (const d of page.droplets) await fanOut(d);
+   * if (page.nextCursor) await persistCursor(page.nextCursor);
+   * ```
    */
-  async listSince(input: ListSinceInput): Promise<KeyPage> {
+  async listSince(input: ListSinceInput): Promise<SincePage> {
     const ctx = resolveCtx();
-    return stubOrDispatch<KeyPage>(
-      BINDING.db_listSince,
-      () => ctx.db.listSince,
-      (fn) => (fn as (i: ListSinceInput) => Promise<KeyPage>)(input),
-      input,
-    );
+    if (typeof ctx.db.listSince !== 'function') {
+      throw new BindingNotInstalled(
+        `${BINDING.db_listSince} requires ctx.db.listSince which is not ` +
+          `installed in this bolt runtime. The @raindb/bolt-sdk wrapper ` +
+          `is LIVE since v0.2.0; the substrate-side binding landed in ` +
+          `phoenix commit af5e9eb. See ` +
+          `~/src/raindb-phoenix-lightning/docs/AUDIT_BOLT_SDK_GAPS.md §G ` +
+          `for the gap card that owns this surface.`,
+        { binding: BINDING.db_listSince, input },
+      );
+    }
+    try {
+      const out = await ctx.db.listSince(
+        input.formationId,
+        input.sinceCursor,
+        input.opts ?? {},
+      );
+      return out as SincePage;
+    } catch (err) {
+      translateBindingError(err, {
+        binding: BINDING.db_listSince,
+        input,
+      });
+    }
   },
 
   /**

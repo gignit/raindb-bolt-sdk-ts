@@ -18,6 +18,9 @@ import { onPing } from './handlers/ping.js';
 import { onReadAgent, onWriteAgent } from './handlers/agent.js';
 import { onSecretTest } from './handlers/secret-test.js';
 import { onEchoStream } from './handlers/echo-stream.js';
+import { onObjectRoundtrip } from './handlers/object-roundtrip.js';
+import { onKeysWalk } from './handlers/keys-walk.js';
+import { onSqlProbe } from './handlers/sql-probe.js';
 
 export async function onHttpRequest(
   ctx: BoltContext,
@@ -43,10 +46,29 @@ export async function onHttpRequest(
   if (req.method === 'GET' && req.path === '/echo-stream') {
     return onEchoStream(ctx, req);
   }
+  // v0.2.0 -- newly LIVE bindings (substrate commit af5e9eb).
+  if (req.method === 'POST' && req.path === '/object-roundtrip') {
+    return onObjectRoundtrip(ctx, req);
+  }
+  if (req.method === 'GET' && req.path === '/keys-walk') {
+    return onKeysWalk(ctx, req);
+  }
+  if (req.method === 'GET' && req.path === '/sql-probe') {
+    return onSqlProbe(ctx, req);
+  }
   return { status: 404, body: { error: 'no route', path: req.path } };
 }
 
 // In real bolts each handler is a separate exported entry. The
 // dispatcher resolves by HandlerRef.Name. Re-exporting them here so
 // the bolt.json's `handler` fields resolve cleanly.
-export { onPing, onReadAgent, onWriteAgent, onSecretTest, onEchoStream };
+export {
+  onPing,
+  onReadAgent,
+  onWriteAgent,
+  onSecretTest,
+  onEchoStream,
+  onObjectRoundtrip,
+  onKeysWalk,
+  onSqlProbe,
+};

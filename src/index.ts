@@ -16,7 +16,7 @@
 // =====================================================================
 // Version constant -- mirrors package.json. Update both together.
 // =====================================================================
-export const VERSION = '0.1.0';
+export const VERSION = '0.2.0';
 
 // =====================================================================
 // Runtime helpers (the ambient ctx resolver)
@@ -189,6 +189,7 @@ export type {
   BulkDropletResult,
   KeyEntry,
   KeyPage,
+  SincePage,
   // Token family
   Token,
   WriteTokenOptions,
