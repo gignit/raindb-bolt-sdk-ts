@@ -38,7 +38,10 @@ test('sql.query throws BindingNotInstalled when ctx.sql is missing', async () =>
     () => sql.query({ sql: 'SELECT 1' }),
     (e: unknown) => {
       assert.ok(e instanceof BindingNotInstalled);
-      assert.match((e as Error).message, /ctx\.sql\.query is not installed/);
+      assert.match(
+        (e as Error).message,
+        /ctx\.sql\.query.*ctx\.sql which is not installed/,
+      );
       assert.match((e as Error).message, /AUDIT_BOLT_SDK_GAPS\.md/);
       return true;
     },
@@ -140,7 +143,10 @@ test('tags.tag throws BindingNotInstalled', async () => {
   );
 });
 
-test('db.listKeys (stub) throws BindingNotInstalled', async () => {
+test('db.listKeys throws BindingNotInstalled on pre-af5e9eb runtime', async () => {
+  // Default mockCtx omits listKeys (simulates a lightning binary
+  // older than phoenix commit af5e9eb). The v0.2 LIVE wrapper
+  // still guards with BindingNotInstalled rather than crashing.
   setCtx(mockCtx());
   await assert.rejects(
     () => db.listKeys({ formationId: 'f', indexId: 'i' }),
@@ -155,13 +161,15 @@ test('sql.query dispatches through when ctx.sql.query is present', async () => {
   setCtx(
     mockCtx({
       // The cast is fine -- the BoltContext type has sql?: SqlBinding,
-      // and we're providing one for this test.
+      // and we're providing one for this test. Note: rows are positional
+      // (unknown[][]) per the substrate's SQLResult shape (changed in
+      // v0.2.0 to match runtime/engine.go::SQLResult).
       sql: {
         query: async () => {
           dispatched = true;
           return {
             columns: ['n'],
-            rows: [{ n: 1 }],
+            rows: [[1]],
             rowCount: 1,
             durationMs: 1,
             truncated: false,
@@ -174,6 +182,8 @@ test('sql.query dispatches through when ctx.sql.query is present', async () => {
   const out = await sql.query({ sql: 'SELECT 1 AS n' });
   assert.equal(dispatched, true);
   assert.equal(out.rowCount, 1);
+  assert.equal(out.columns[0], 'n');
+  assert.equal(out.rows[0]?.[0], 1);
 });
 
 test('a stubbed binding routes typed errors through translateBindingError', async () => {

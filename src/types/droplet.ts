@@ -83,22 +83,50 @@ export interface BulkDropletResult {
 }
 
 /**
- * One key in a `db.listKeys` (STUBBED) result. Mirrors
- * @raindb/agent's `KeyEntry`.
+ * One key in a `db.listKeys` result. Mirrors @raindb/agent's
+ * `KeyEntry`. The `etag` field is added as an optional extension
+ * over the agent's shape because the substrate's `ListKeyEntry`
+ * (runtime/engine.go) carries S3 ETag; the goja installer surfaces
+ * it as the `etag` field only when non-empty. Agent-shape compat
+ * is preserved (extra optional fields are structurally tolerated).
  */
 export interface KeyEntry {
   readonly key: string;
   readonly size: number;
   readonly lastModified: string;
+  /**
+   * S3 ETag for the underlying pointer object. Absent when the
+   * substrate did not surface one (older index entries, in-memory
+   * pointers). Added in v0.2.0 alongside the LIVE listKeys swap.
+   */
+  readonly etag?: string;
 }
 
 /**
- * Page of keys from `db.listKeys` (STUBBED). Mirrors
- * @raindb/agent's `KeyPage`.
+ * Page of keys from `db.listKeys`. Mirrors @raindb/agent's
+ * `KeyPage`.
  */
 export interface KeyPage {
   readonly keys: KeyEntry[];
   readonly nextCursor?: string | null;
   readonly hasMore: boolean;
   readonly totalCount: number;
+}
+
+/**
+ * Page of droplets returned from `db.listSince` -- the asc-poll-
+ * from-cursor live-feed primitive. Distinct from {@link KeyPage}
+ * because listSince returns full droplet payloads (the substrate's
+ * `ListSincePage.Droplets` is `[]map[string]any`, projected as
+ * full droplets to the JS side per
+ * `pkg/lightning/engines/goja/bindings.go::listSincePageToJS`).
+ *
+ * Added in v0.2.0. The v0.1 stub typed listSince as `KeyPage` --
+ * that was incorrect; this is a shape divergence resolved in favor
+ * of the substrate's actual contract.
+ */
+export interface SincePage {
+  readonly droplets: Droplet[];
+  readonly nextCursor?: string | null;
+  readonly hasMore: boolean;
 }
