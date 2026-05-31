@@ -13,7 +13,7 @@
 //      and routes through `setCtx(ctx)` so the call site reads
 //      cleanly without ctx threading.
 //
-// LIVE methods (audit §B / §G; goja installer in
+// LIVE methods (audit §B / §G / §I / §L / §M; goja installer in
 // `pkg/lightning/engines/goja/bindings.go::installDBBinding`):
 //   - readLatest(formationId, indexId, scopeValue)
 //   - readDroplet(formationId, dropletId)
@@ -21,13 +21,16 @@
 //   - listDroplets(formationId, prefix?, pageSize?)
 //   - listKeys(formationId, indexId, opts?)         [LIVE since v0.2.0]
 //   - listSince(formationId, sinceCursor, opts?)    [LIVE since v0.2.0]
+//   - tag(formationId, scopeValue, tags)            [LIVE since v0.3.0]
+//   - untag(formationId, scopeValue, tagKeys)       [LIVE since v0.3.0]
+//   - expire(formationId, scopeValue)               [LIVE since v0.3.0]
+//   - expirationDays()                              [LIVE since v0.3.0]
+//   - writeBatch(formationId, items, opts?)         [LIVE since v0.3.0]
 //
 // STUBBED methods (substrate-side pending; per-method JSDoc points
 // at the audit gap card):
-//   - writeBatch (audit §I Gap 4)
 //   - readAt (audit §R Gap 13)
 //   - readCurrent, resolveFormation (audit §S Gap 14)
-//   - expire, expirationDays (audit §M Gap 8)
 //
 // Cross-validation: input/output types match @raindb/agent's
 // droplet_* tools field-for-field per handoff §J. The wrapper does
@@ -43,8 +46,6 @@ import type {
   DropletEnvelope,
   KeyPage,
   SincePage,
-  WriteResult,
-  BulkDropletResult,
 } from '../types/droplet.js';
 import type { CursorPaginationOpts } from '../types/cursor.js';
 
@@ -96,24 +97,94 @@ export interface ListSinceInput {
   opts?: CursorPaginationOpts;
 }
 
+/**
+ * One row in a {@link WriteBatchInput.items} array. Mirrors the
+ * substrate `runtime.BatchItem` shape (per
+ * `pkg/lightning/runtime/engine.go`).
+ *
+ * Per-item `idempotencyKey` scopes the SDK's retry semantics for
+ * that one write; omit to let the substrate derive a per-item key
+ * from the batch-level idempotency key (when present) plus the
+ * item's array index.
+ */
 export interface WriteBatchItem {
-  formationId: string;
   payload: Record<string, unknown>;
+  idempotencyKey?: string;
 }
 
+/**
+ * Options for {@link db.writeBatch}. Mirrors the substrate
+ * `runtime.BatchOptions` shape.
+ *
+ * Substrate-side default for `triggerFlows` is `true` (per the
+ * goja installer in `extractBatchOptions`); the wrapper does not
+ * override that default. Omit `triggerFlows` to keep it.
+ */
+export interface WriteBatchOpts {
+  /**
+   * Batch-level idempotency key. When set, the SDK records a
+   * pointer-claim under this key so the whole batch can be
+   * deduplicated on retry.
+   */
+  idempotencyKey?: string;
+  /**
+   * Whether action-flow dispatch fires for each successful write.
+   * Mirrors `WriteOptions.TriggerFlows`. Defaults to true on the
+   * substrate side.
+   */
+  triggerFlows?: boolean;
+  /**
+   * Caps the SDK's per-batch parallel write goroutine count. <= 0
+   * uses the SDK's configured default (typically `WriteConcurrency`
+   * from the Client config).
+   */
+  maxConcurrency?: number;
+}
+
+/**
+ * Named-args input shape for {@link db.writeBatch}. The wrapper
+ * repacks this into the substrate's positional `(formationId,
+ * items, opts?)` calling convention.
+ */
 export interface WriteBatchInput {
+  /** Single formation per call (substrate constraint). */
+  formationId: string;
   items: WriteBatchItem[];
-  opts?: {
-    idempotencyKey?: string;
-    triggerFlows?: boolean;
-    author?: string;
-  };
+  opts?: WriteBatchOpts;
 }
 
+/**
+ * Per-item entry in {@link WriteBatchResult.items}. Mirrors the
+ * substrate `runtime.BatchItemResult` shape -- the keys that
+ * `batchResultToJS` actually projects to the JS side.
+ *
+ * Discriminate success vs. failure on `error`: an empty/absent
+ * `error` plus a non-empty `dropletId` means success. The
+ * substrate's `WriteBatch` returns partial success -- some items
+ * may succeed while others fail in the same call.
+ */
+export interface BatchItemResult {
+  readonly index: number;
+  readonly pathsWritten: string[];
+  /** Populated on success. Empty/absent on failure. */
+  readonly dropletId?: string;
+  /** Populated when the formation had a declared scope-key. */
+  readonly scopeValue?: string;
+  /** Populated on failure; preserves the substrate's typed-error string. */
+  readonly error?: string;
+}
+
+/**
+ * Result shape from {@link db.writeBatch}. Mirrors the substrate
+ * `runtime.BatchResult` shape (the GraphQL `BatchWriteResult`
+ * projection) so a bolt that previously used the GraphQL path can
+ * swap to the native binding without reshaping its result-handling.
+ */
 export interface WriteBatchResult {
-  writes: WriteResult[];
-  bulkResults?: BulkDropletResult[];
-  idempotencyHit: boolean;
+  readonly total: number;
+  readonly succeeded: number;
+  readonly failed: number;
+  readonly items: BatchItemResult[];
 }
 
 export interface ReadAtInput {
@@ -128,14 +199,47 @@ export interface ReadCurrentInput {
   scopeValue: string;
 }
 
+/**
+ * Named-args input for {@link db.expire}. The substrate operates
+ * at the entity (scopeValue) level despite the SDK method being
+ * named `ExpireDroplet` -- see substrate brain doc Q3 + the
+ * SDKDatabase comment in `pkg/lightning/runtime/engine.go`.
+ *
+ * NOTE: the v0.1 stub shape had `dropletId`; that shape was
+ * incorrect. The substrate's actual contract is per-entity. See
+ * CHANGELOG v0.3.0 "Shape divergences from v0.1 stubs."
+ */
 export interface ExpireInput {
   formationId: string;
-  dropletId: string;
+  scopeValue: string;
 }
 
-export interface ExpirationDaysInput {
+/**
+ * Named-args input for {@link db.tag}. Tags are
+ * `Record<string, string>` (S3 tag key=value pairs) per substrate
+ * decision (brain doc Q1). The v0.1 stub used `string[]`; that
+ * was incorrect.
+ *
+ * Additive semantics: existing tags not in the input remain
+ * untouched. To replace the whole tag set, call {@link db.untag}
+ * with the old keys first.
+ */
+export interface TagInput {
   formationId: string;
   scopeValue: string;
+  tags: Record<string, string>;
+}
+
+/**
+ * Named-args input for {@link db.untag}. `tagKeys` is the list of
+ * tag KEY names to remove (string[]), not tag values. Idempotent
+ * substrate-side: removing a key that wasn't tagged is not an
+ * error.
+ */
+export interface UntagInput {
+  formationId: string;
+  scopeValue: string;
+  tagKeys: string[];
 }
 
 // =====================================================================
@@ -194,13 +298,55 @@ export interface DbBinding {
     opts?: CursorPaginationOpts,
   ) => Promise<SincePage>;
 
+  // --- LIVE since v0.3.0 (substrate Tier 2 commit eee3eac) ---
+  //
+  // Positional args per the goja installer (see
+  // `pkg/lightning/engines/goja/bindings.go::installDBBinding`).
+  // Methods are typed optional because older lightning binaries
+  // (pre-eee3eac) won't carry them; the wrapper guards with
+  // BindingNotInstalled, matching the v0.2 listKeys/listSince
+  // pattern.
+  //
+  // Tags shape: tag takes Record<string,string>; untag takes
+  // string[] (KEY names to remove). See substrate brain doc Q1.
+  tag?: (
+    formationId: string,
+    scopeValue: string,
+    tags: Record<string, string>,
+  ) => Promise<void>;
+  untag?: (
+    formationId: string,
+    scopeValue: string,
+    tagKeys: string[],
+  ) => Promise<void>;
+  /**
+   * Flag the entity (formationId, scopeValue) for S3 lifecycle
+   * deletion. The substrate operates at entity level despite the
+   * SDK method name.
+   */
+  expire?: (formationId: string, scopeValue: string) => Promise<void>;
+  /**
+   * Returns the tenant-wide retention window in days. The substrate
+   * binding takes NO args and surfaces a synchronous value; we
+   * type it as Promise<number> so the SDK surface stays uniformly
+   * awaitable.
+   */
+  expirationDays?: () => Promise<number> | number;
+  /**
+   * Atomic multi-droplet write to a single formation. The wrapper
+   * repacks named-args into the substrate's positional convention.
+   * Returns the substrate's `batchResultToJS` projection.
+   */
+  writeBatch?: (
+    formationId: string,
+    items: WriteBatchItem[],
+    opts?: WriteBatchOpts,
+  ) => Promise<WriteBatchResult>;
+
   // --- STUBS (optional methods; substrate may not have shipped them) ---
-  writeBatch?: (input: WriteBatchInput) => Promise<WriteBatchResult>;
   readAt?: (input: ReadAtInput) => Promise<Droplet | null>;
   readCurrent?: (input: ReadCurrentInput) => Promise<Droplet | null>;
   resolveFormation?: (dropletId: string) => Promise<string | null>;
-  expire?: (input: ExpireInput) => Promise<void>;
-  expirationDays?: (input: ExpirationDaysInput) => Promise<number>;
 }
 
 // =====================================================================
@@ -211,9 +357,11 @@ export interface DbBinding {
  * The ctx.db namespace -- ergonomic SDK wrapper.
  *
  * **LIVE**: readLatest, readDroplet, writeDroplet, listDroplets,
- *           listKeys (since v0.2.0), listSince (since v0.2.0)
- * **STUB**: writeBatch, readAt, readCurrent, resolveFormation,
- *           expire, expirationDays
+ *           listKeys (since v0.2.0), listSince (since v0.2.0),
+ *           tag (since v0.3.0), untag (since v0.3.0),
+ *           expire (since v0.3.0), expirationDays (since v0.3.0),
+ *           writeBatch (since v0.3.0)
+ * **STUB**: readAt, readCurrent, resolveFormation
  */
 export const db = {
   /**
@@ -490,22 +638,159 @@ export const db = {
   },
 
   /**
-   * STUB (audit §I Gap 4). Atomic multi-droplet write across one or
-   * more formations.
+   * Add S3 tag key=value pairs to an entity (formationId,
+   * scopeValue). Additive semantics -- existing tags not in the
+   * input remain untouched. Tags drive S3 lifecycle policies and
+   * the vector index's filter inputs.
    *
-   * @requires capability: `write` on every referenced formation
-   * @throws BindingNotInstalled until substrate ships ctx.db.writeBatch
-   * @throws CapabilityDenied for the first missing formation
+   * LIVE since v0.3.0 (audit §L Gap 7; substrate commit eee3eac).
+   *
+   * @requires capability: `tag` on the formation (NEW canonical op,
+   *   distinct from `write` -- a bolt with droplet-write access may
+   *   not need tag-mutation access and vice versa).
+   * @throws CapabilityDenied
+   * @throws BindingNotInstalled when running against a lightning
+   *   binary that pre-dates phoenix commit eee3eac
+   *
+   * @example
+   * ```ts
+   * await db.tag({
+   *   formationId: 'agent-graph',
+   *   scopeValue: 'a-018f...',
+   *   tags: { 'env': 'prod', 'tier': 'gold' },
+   * });
+   * ```
+   */
+  async tag(input: TagInput): Promise<void> {
+    const ctx = resolveCtx();
+    if (typeof ctx.db.tag !== 'function') {
+      throw new BindingNotInstalled(
+        `${BINDING.db_tag} requires ctx.db.tag which is not ` +
+          `installed in this bolt runtime. The @raindb/bolt-sdk wrapper ` +
+          `is LIVE since v0.3.0; the substrate-side binding landed in ` +
+          `phoenix commit eee3eac. See ` +
+          `~/src/raindb-phoenix-lightning/docs/AUDIT_BOLT_SDK_GAPS.md §L ` +
+          `for the gap card that owns this surface.`,
+        { binding: BINDING.db_tag, input },
+      );
+    }
+    try {
+      await ctx.db.tag(input.formationId, input.scopeValue, input.tags);
+    } catch (err) {
+      translateBindingError(err, {
+        binding: BINDING.db_tag,
+        input,
+      });
+    }
+  },
+
+  /**
+   * Remove the named tag KEYS from an entity. Idempotent --
+   * removing a key that wasn't tagged is not an error.
+   *
+   * LIVE since v0.3.0 (audit §L Gap 7; substrate commit eee3eac).
+   *
+   * @requires capability: `tag` on the formation
+   * @throws CapabilityDenied
+   * @throws BindingNotInstalled on pre-eee3eac runtime
+   *
+   * @example
+   * ```ts
+   * await db.untag({
+   *   formationId: 'agent-graph',
+   *   scopeValue: 'a-018f...',
+   *   tagKeys: ['tier'],
+   * });
+   * ```
+   */
+  async untag(input: UntagInput): Promise<void> {
+    const ctx = resolveCtx();
+    if (typeof ctx.db.untag !== 'function') {
+      throw new BindingNotInstalled(
+        `${BINDING.db_untag} requires ctx.db.untag which is not ` +
+          `installed in this bolt runtime. The @raindb/bolt-sdk wrapper ` +
+          `is LIVE since v0.3.0; the substrate-side binding landed in ` +
+          `phoenix commit eee3eac. See ` +
+          `~/src/raindb-phoenix-lightning/docs/AUDIT_BOLT_SDK_GAPS.md §L ` +
+          `for the gap card that owns this surface.`,
+        { binding: BINDING.db_untag, input },
+      );
+    }
+    try {
+      await ctx.db.untag(input.formationId, input.scopeValue, input.tagKeys);
+    } catch (err) {
+      translateBindingError(err, {
+        binding: BINDING.db_untag,
+        input,
+      });
+    }
+  },
+
+  /**
+   * Atomic multi-droplet write to a single formation. The
+   * substrate's WriteBatch is single-formation only (matches SDK
+   * reality; see substrate brain doc Q5). For cross-formation
+   * writes, issue multiple writeBatch calls.
+   *
+   * LIVE since v0.3.0 (audit §I Gap 4; substrate commit eee3eac).
+   *
+   * Per-item `idempotencyKey` scopes individual retry semantics;
+   * the batch-level `opts.idempotencyKey` claims the whole batch
+   * under a single pointer for batch-level dedup. Partial success
+   * is the substrate's contract: inspect each
+   * {@link BatchItemResult.error} to discriminate item success vs.
+   * failure -- `failed > 0` does NOT mean the whole call rejected.
+   *
+   * @requires capability: `write` on the formation. The wrapper's
+   *   capability check is one OpWrite call on the formationId;
+   *   per-item formation overrides are NOT supported (the SDK's
+   *   `WriteBatch` signature does not support them).
+   * @throws CapabilityDenied when `write` is not declared
+   * @throws BindingNotInstalled on pre-eee3eac runtime
+   *
+   * @example
+   * ```ts
+   * const r = await db.writeBatch({
+   *   formationId: 'agent-graph',
+   *   items: [
+   *     { payload: { agentId: 'a-1', name: 'Bot' } },
+   *     { payload: { agentId: 'a-2', name: 'Bee' }, idempotencyKey: 'a-2-init' },
+   *   ],
+   *   opts: { idempotencyKey: 'agents-init-v1', triggerFlows: true },
+   * });
+   * if (r.failed > 0) {
+   *   for (const it of r.items) {
+   *     if (it.error) log.warn('batch item failed', { index: it.index, error: it.error });
+   *   }
+   * }
+   * ```
    */
   async writeBatch(input: WriteBatchInput): Promise<WriteBatchResult> {
     const ctx = resolveCtx();
-    return stubOrDispatch<WriteBatchResult>(
-      BINDING.db_writeBatch,
-      () => ctx.db.writeBatch,
-      (fn) =>
-        (fn as (i: WriteBatchInput) => Promise<WriteBatchResult>)(input),
-      input,
-    );
+    if (typeof ctx.db.writeBatch !== 'function') {
+      throw new BindingNotInstalled(
+        `${BINDING.db_writeBatch} requires ctx.db.writeBatch which is not ` +
+          `installed in this bolt runtime. The @raindb/bolt-sdk wrapper ` +
+          `is LIVE since v0.3.0; the substrate-side binding landed in ` +
+          `phoenix commit eee3eac. See ` +
+          `~/src/raindb-phoenix-lightning/docs/AUDIT_BOLT_SDK_GAPS.md §I ` +
+          `for the gap card that owns this surface.`,
+        { binding: BINDING.db_writeBatch, input },
+      );
+    }
+    try {
+      const out = await ctx.db.writeBatch(
+        input.formationId,
+        input.items,
+        input.opts,
+      );
+      return out as WriteBatchResult;
+    } catch (err) {
+      translateBindingError(err, {
+        binding: BINDING.db_writeBatch,
+        input,
+      });
+    }
   },
 
   /**
@@ -562,38 +847,102 @@ export const db = {
   },
 
   /**
-   * STUB (audit §M Gap 8). Flag a specific droplet for tier-1
-   * retention expiry; cascades vector cleanup.
+   * Flag the entity (formationId, scopeValue) for S3 lifecycle
+   * deletion. All revision droplets, floats, and embedding-index
+   * entries for that entity are marked for cleanup; the vector
+   * cleanup cascades.
    *
-   * @requires capability: `expire` on the formation (NEW canonical op,
-   *   distinct from `write` -- see audit §M for rationale)
-   * @throws BindingNotInstalled until substrate ships ctx.db.expire
+   * LIVE since v0.3.0 (audit §M Gap 8; substrate commit eee3eac).
+   *
+   * Destructive -- a separate capability op from `write` per
+   * audit §M: expiration cascades destructively and SHOULD NOT be
+   * implicit in write capability. A bolt declaring `expire`
+   * explicitly opts into "I may retire my own data."
+   *
+   * NOTE: the substrate SDK method is named `ExpireDroplet` but
+   * operates at the entity (scopeValue) level, NOT per-droplet.
+   * The v0.1 stub typed `{formationId, dropletId}` -- that was
+   * incorrect. See CHANGELOG v0.3.0 "Shape divergences from v0.1
+   * stubs."
+   *
+   * @requires capability: `expire` on the formation
    * @throws CapabilityDenied
+   * @throws BindingNotInstalled on pre-eee3eac runtime
+   *
+   * @example
+   * ```ts
+   * await db.expire({ formationId: 'agent-graph', scopeValue: 'a-018f...' });
+   * ```
    */
   async expire(input: ExpireInput): Promise<void> {
     const ctx = resolveCtx();
-    return stubOrDispatch<void>(
-      BINDING.db_expire,
-      () => ctx.db.expire,
-      (fn) => (fn as (i: ExpireInput) => Promise<void>)(input),
-      input,
-    );
+    if (typeof ctx.db.expire !== 'function') {
+      throw new BindingNotInstalled(
+        `${BINDING.db_expire} requires ctx.db.expire which is not ` +
+          `installed in this bolt runtime. The @raindb/bolt-sdk wrapper ` +
+          `is LIVE since v0.3.0; the substrate-side binding landed in ` +
+          `phoenix commit eee3eac. See ` +
+          `~/src/raindb-phoenix-lightning/docs/AUDIT_BOLT_SDK_GAPS.md §M ` +
+          `for the gap card that owns this surface.`,
+        { binding: BINDING.db_expire, input },
+      );
+    }
+    try {
+      await ctx.db.expire(input.formationId, input.scopeValue);
+    } catch (err) {
+      translateBindingError(err, {
+        binding: BINDING.db_expire,
+        input,
+      });
+    }
   },
 
   /**
-   * STUB (audit §M Gap 8). Read the formation's declared retention
-   * window for a scope. Returns days; 0 means "no retention rule".
+   * Read the tenant-wide retention window (in days). Surfaces the
+   * SDK's `Client.ExpirationDays()` accessor.
    *
-   * @requires capability: `read` on the formation
-   * @throws BindingNotInstalled until substrate ships ctx.db.expirationDays
+   * LIVE since v0.3.0 (audit §M Gap 8; substrate commit eee3eac).
+   *
+   * Takes NO arguments -- the value is tenant-wide, not per
+   * formation/scope (per substrate brain doc Q4). The v0.1 stub
+   * typed `{formationId, scopeValue}` -- that was incorrect.
+   *
+   * Returns 0 when no retention rule is configured for the tenant.
+   *
+   * No capability gate (the value is metadata, not data).
+   *
+   * @throws BindingNotInstalled on pre-eee3eac runtime
+   *
+   * @example
+   * ```ts
+   * const days = await db.expirationDays();
+   * if (days === 0) log.info('no retention rule configured for tenant');
+   * ```
    */
-  async expirationDays(input: ExpirationDaysInput): Promise<number> {
+  async expirationDays(): Promise<number> {
     const ctx = resolveCtx();
-    return stubOrDispatch<number>(
-      BINDING.db_expirationDays,
-      () => ctx.db.expirationDays,
-      (fn) => (fn as (i: ExpirationDaysInput) => Promise<number>)(input),
-      input,
-    );
+    if (typeof ctx.db.expirationDays !== 'function') {
+      throw new BindingNotInstalled(
+        `${BINDING.db_expirationDays} requires ctx.db.expirationDays ` +
+          `which is not installed in this bolt runtime. The ` +
+          `@raindb/bolt-sdk wrapper is LIVE since v0.3.0; the ` +
+          `substrate-side binding landed in phoenix commit eee3eac. See ` +
+          `~/src/raindb-phoenix-lightning/docs/AUDIT_BOLT_SDK_GAPS.md §M ` +
+          `for the gap card that owns this surface.`,
+        { binding: BINDING.db_expirationDays },
+      );
+    }
+    try {
+      // The goja installer surfaces ExpirationDays as a synchronous
+      // value (no Promise wrap). Promise.resolve normalizes both
+      // shapes so the wrapper stays awaitable regardless of how the
+      // host returns it.
+      const out = await Promise.resolve(ctx.db.expirationDays());
+      return out as number;
+    } catch (err) {
+      translateBindingError(err, {
+        binding: BINDING.db_expirationDays,
+      });
+    }
   },
 };

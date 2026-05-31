@@ -8,6 +8,213 @@ Per the handoff doc §N, during the v0.x parallel-build phase: stubs may
 be swapped to live at any minor version bump; type changes to LIVE
 wrappers are breaking and trigger a minor version bump.
 
+## [0.3.0] - 2026-05-31
+
+Wave 3A release: swap the four Tier 2 + Wave 2.5 stubs to LIVE
+wrappers.
+
+Substrate-side references:
+- phoenix merge commit `eee3eac` (Tier 2: tag/untag, expire/
+  expirationDays, writeBatch). Originating branch
+  `substrate/tier-2-tag-expire-writebatch`, internal commit
+  `e09351f`.
+- phoenix merge commit `f934956` (Wave 2.5 actions precursor:
+  bolt-callback + ctx.schedule). Originating branch
+  `substrate/wave-2_5-actions-precursor`, internal commit
+  `48059e1`.
+
+Coordination ledger:
+`~/src/raindb-phoenix-lightning/docs/BOLT_SDK_COORDINATION.md`.
+
+### Swapped from STUB to LIVE
+
+- **`db.tag`** -- audit §L (Gap 7). Goja installer in
+  `installDBBinding` exposing `ctx.db.tag(formationId, scopeValue,
+  tags)`. Tags shape is `Record<string, string>` (S3 tag
+  key=value pairs). Capability op: `tag` on the formation (NEW
+  canonical op, distinct from `write` -- a bolt with droplet-write
+  access may not need tag-mutation access and vice versa). The
+  ergonomic `tags.tag(formationId, scopeValue, tags)` namespace
+  re-routes through the new `db.tag`.
+- **`db.untag`** -- audit §L (Gap 7). `ctx.db.untag(formationId,
+  scopeValue, tagKeys)`. `tagKeys` is the list of KEY names to
+  remove (not values). Capability op: `tag`. Idempotent
+  substrate-side. The ergonomic `tags.untag(...)` re-routes.
+- **`db.expire`** -- audit §M (Gap 8). `ctx.db.expire(formationId,
+  scopeValue)`. Operates at the entity (scopeValue) level despite
+  the substrate SDK method being named `ExpireDroplet`. Marks the
+  entity (all revision droplets, floats, embedding-index entries)
+  for S3 lifecycle deletion; vector cleanup cascades. Capability
+  op: `expire` -- destructive, distinct from `write` per audit
+  §M. A bolt declaring `expire` explicitly opts into "I may
+  retire my own data."
+- **`db.expirationDays`** -- audit §M (Gap 8).
+  `ctx.db.expirationDays()` (takes NO args -- the value is
+  tenant-wide, not per-formation/per-scope per substrate brain
+  doc Q4). Returns the tenant's retention window in days; 0
+  means no retention rule. No capability gate (metadata access).
+- **`db.writeBatch`** -- audit §I (Gap 4).
+  `ctx.db.writeBatch(formationId, items, opts?)`. SINGLE
+  formation per call (matches SDK reality per substrate brain
+  doc Q5; cross-formation writes require multiple writeBatch
+  calls). Capability op: `write` on the formation -- one OpWrite
+  check covers the whole batch. Partial-success contract: items
+  may individually succeed or fail; inspect `result.items[i].error`
+  to discriminate. The result shape mirrors the substrate's
+  `batchResultToJS` projection (`{total, succeeded, failed,
+  items: BatchItemResult[]}`).
+- **`schedule.schedule`** -- Wave 2.5 actions precursor.
+  `ctx.schedule(formationId, runAfterMs, actionRef, payload?)`.
+  Returns the substrate-minted scheduled event's S3 key for
+  future cancellation (cancellation API is a v0.2 substrate
+  follow-up). Capability op: bolt-level `OpSchedule` -- single
+  boolean opt-in on `capabilities.raindb.schedule: true`. Distinct
+  from formation-level read/write because the schedule's target
+  is supplied at call time and the eventual callback runs in a
+  separate invocation context.
+
+### Shape divergences from v0.1 stubs
+
+The substrate's actual contract differed from four v0.1 stub
+shapes; the substrate wins per the handoff's "bolt-sdk's role is
+to mirror the substrate; it doesn't drive shape decisions"
+discipline:
+
+1. **Tags are `Record<string, string>`** (S3 tag key=value
+   pairs), NOT `string[]`. The v0.1 stub `TagInput` typed `tags`
+   as `string[]`; the substrate's `TagEntity` takes a
+   `map[string]string` per `SDKDatabase.TagEntity`. Bolts that
+   had imported the v0.1 type (which threw `BindingNotInstalled`
+   at runtime, so consumers are rare) need to switch from
+   `['a', 'b']` to `{ a: 'true', b: 'true' }` (or whatever
+   key=value mapping fits).
+
+2. **`db.untag` takes a `tagKeys: string[]`** -- the list of KEY
+   names to remove, not values. The v0.1 stub re-used `TagInput`
+   (with its incorrect `string[]` shape) for both add and remove
+   paths, which couldn't distinguish "add these tag values" from
+   "remove these tag keys." The new `UntagInput` shape makes the
+   distinction explicit.
+
+3. **`db.expire` operates on `{formationId, scopeValue}`**, not
+   `{formationId, dropletId}`. The substrate's `ExpireDroplet`
+   method (despite its name) flags ALL droplet revisions, floats,
+   and embedding-index entries for the entity keyed by
+   `(formationId, scopeValue)`. The v0.1 `ExpireInput` typed
+   `dropletId` which did not correspond to anything the substrate
+   produces. See substrate brain doc Q3.
+
+4. **`db.expirationDays` takes NO arguments** and returns the
+   tenant-wide value. The v0.1 stub typed
+   `{formationId, scopeValue}`; the substrate's
+   `Client.ExpirationDays()` is a tenant-scoped accessor per
+   substrate brain doc Q4. The v0.1 `ExpirationDaysInput` type is
+   REMOVED from the public surface.
+
+5. **`db.writeBatch` is single-formation**: input shape changed
+   from `{items: [{formationId, payload}, ...]}` (cross-formation)
+   to `{formationId, items: [{payload, idempotencyKey?}, ...],
+   opts?}` (single formation, per-item idempotency). The result
+   shape changed from `{writes, bulkResults, idempotencyHit}` to
+   the substrate's `batchResultToJS` projection
+   (`{total, succeeded, failed, items: BatchItemResult[]}`). Per
+   substrate brain doc Q5, cross-formation in one call isn't in
+   scope because the SDK's `WriteBatch` signature doesn't support
+   it.
+
+### Stayed STUBBED
+
+- **`tags.replaceTags`** -- the substrate did NOT ship an atomic
+  replace binding. The SDK exposes `TagEntity` (additive) and
+  `UntagEntity` (key-removal) only. The wrapper continues to
+  throw `BindingNotInstalled` on call. Bolts that don't need
+  atomicity can emulate via:
+  ```ts
+  await db.untag({ formationId, scopeValue, tagKeys: oldKeysToRemove });
+  await db.tag({ formationId, scopeValue, tags: newTagSet });
+  ```
+  (Non-atomic; brief window where the entity has neither the old
+  nor the new tag set.)
+
+### Added
+
+- **`src/bindings/schedule.ts`** -- new file. `schedule.schedule()`
+  wrapper plus `ScheduleBinding` / `ScheduleInput` types.
+- **`db.tag` / `db.untag` methods** on the canonical `db` namespace
+  (in addition to the ergonomic `tags.tag` / `tags.untag` 3-arg
+  re-routes).
+- **`BatchItemResult`** type in `src/bindings/db.ts` -- the
+  per-item entry of `WriteBatchResult.items`.
+- **`WriteBatchOpts`** type -- the new shape for the batch-level
+  options object (`idempotencyKey`, `triggerFlows`,
+  `maxConcurrency`).
+- **`TagInput`** / **`UntagInput`** types on the canonical `db`
+  namespace.
+- **`BoltContext.schedule?: ScheduleBinding`** optional property.
+  Marked optional for backwards-compat with older lightning
+  binaries (pre-f934956); the wrapper guards with
+  `BindingNotInstalled`.
+- **`BINDING.db_tag`** / **`BINDING.db_untag`** / **`BINDING.schedule`**
+  constants in `src/internal/constants.ts`.
+- **Four new example-bolt handlers** under
+  `test/integration/example-bolt/src/handlers/`:
+  - `tag-roundtrip.ts` -- tag (additive), tag again, untag,
+    invoke replaceTags STUB
+  - `expire-droplet.ts` -- read expirationDays, expire entity
+  - `write-batch.ts` -- 3-item batch with per-item + batch-level
+    idempotency keys, partial-success discrimination
+  - `schedule-callback.ts` -- enqueue a 60s-deferred bolt-callback
+  Plus `bolt.json` updates declaring `tag`, `expire` ops on the
+  `agent-graph` formation and the bolt-level
+  `capabilities.raindb.schedule: true` opt-in.
+- **23 new unit tests** in `test/unit/v0_3-tier-2-swap.test.ts`
+  covering happy-path, capability-denial (formation-shape for
+  db.* / bolt-shape for schedule.*), and binding-missing paths
+  for each newly-LIVE wrapper. Combined with the v0.1+v0.2 tests,
+  the package now ships with 107 unit tests (all green).
+
+### Changed
+
+- **`DbBinding.tag` / `untag` / `expire` / `expirationDays` /
+  `writeBatch`** methods added to the raw goja-side type with
+  positional-args signatures matching the substrate's installer
+  conventions. All five methods are typed optional (the `?`)
+  for backwards-compat with older lightning binaries; the SDK
+  wrapper guards with `BindingNotInstalled` rather than
+  crashing.
+- `BoltContext.tags?: TagsBinding` documentation updated -- the
+  substrate does NOT install a `ctx.tags` namespace. The SDK
+  wrapper `tags.tag` / `tags.untag` re-routes through `ctx.db.tag`
+  / `ctx.db.untag`. The type field stays declared for
+  backwards-import-compat with v0.1 type consumers.
+- Package `version` bumped from `0.2.0` to `0.3.0`. `VERSION`
+  constant in `src/index.ts` updated to match.
+
+### Notes for the next agent
+
+- The five db.* / schedule.* bindings flipped from `STUB` to
+  `LIVE-SINCE-v0.3.0` in
+  `~/src/raindb-phoenix-lightning/docs/BOLT_SDK_COORDINATION.md`.
+- The example-bolt's `bolt.json` declares two new formation ops
+  (`tag`, `expire` on `agent-graph`) and one new bolt-level cap
+  (`schedule: true`). The substrate-side manifest validator
+  should accept both (`OpTag` + `OpExpire` are in
+  `AllowedFormationOps`; `OpSchedule` is in
+  `AllowedBoltLevelOps`). If validation fails, coordinate with
+  the substrate-side agent.
+- `ctx.schedule` capability denials surface as plain
+  `RainDBBoltError` (not `CapabilityDenied`) because the
+  substrate's denial format (`schedule capability not declared`)
+  is bolt-level, NOT formation-shape, and does not match
+  `CAPABILITY_DENIAL_REGEX`. This is by design; bolts that want
+  to discriminate can pattern-match on `e.message`. See open
+  question 7 in the handoff doc for the regex-tolerance
+  conversation.
+- `tags.replaceTags` stays STUBBED -- the substrate did not ship
+  an atomic replace. If a future substrate work item adds one,
+  swap the stub then; otherwise, document the
+  untag-then-tag emulation pattern in any v0.4 handoff.
+
 ## [0.2.0] - 2026-05-31
 
 Wave 2 release: swap the four Tier 1 stubs to LIVE wrappers.
@@ -178,3 +385,4 @@ discipline:
 
 [0.1.0]: https://github.com/gignit/raindb-bolt-sdk-ts/releases/tag/v0.1.0
 [0.2.0]: https://github.com/gignit/raindb-bolt-sdk-ts/releases/tag/v0.2.0
+[0.3.0]: https://github.com/gignit/raindb-bolt-sdk-ts/releases/tag/v0.3.0

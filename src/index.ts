@@ -16,7 +16,7 @@
 // =====================================================================
 // Version constant -- mirrors package.json. Update both together.
 // =====================================================================
-export const VERSION = '0.2.0';
+export const VERSION = '0.3.0';
 
 // =====================================================================
 // Runtime helpers (the ambient ctx resolver)
@@ -39,6 +39,9 @@ export { cookies } from './bindings/cookies.js';
 export { iam } from './bindings/iam.js';
 export { response } from './bindings/response.js';
 
+// --- LIVE since v0.3.0 (substrate Wave 2.5 commit f934956) ---
+export { schedule } from './bindings/schedule.js';
+
 // --- STUBBED (audit §F-§S; substrate-side pending) ---
 export { token } from './bindings/token.js';
 export { stats } from './bindings/stats.js';
@@ -46,6 +49,13 @@ export { objects } from './bindings/objects.js';
 export { sql } from './bindings/sql.js';
 export { relay } from './bindings/relay.js';
 export { actions } from './bindings/actions.js';
+/**
+ * tags namespace -- {@link tags.tag} and {@link tags.untag} are
+ * LIVE since v0.3.0 (route through `ctx.db.tag` / `ctx.db.untag`,
+ * substrate commit eee3eac). {@link tags.replaceTags} stays STUB
+ * (substrate did not ship an atomic replace binding -- emulate
+ * via untag + tag when non-atomic is acceptable).
+ */
 export { tags } from './bindings/tags.js';
 export { vectors } from './bindings/vectors.js';
 export { files } from './bindings/files.js';
@@ -68,11 +78,14 @@ export type {
   ListSinceInput,
   WriteBatchInput,
   WriteBatchItem,
+  WriteBatchOpts,
   WriteBatchResult,
+  BatchItemResult,
   ReadAtInput,
   ReadCurrentInput,
   ExpireInput,
-  ExpirationDaysInput,
+  TagInput,
+  UntagInput,
 } from './bindings/db.js';
 
 export type { LogBinding } from './bindings/log.js';
@@ -128,7 +141,7 @@ export type {
   InvokeActionInput,
   InvokeActionResult,
 } from './bindings/actions.js';
-export type { TagsBinding, TagInput } from './bindings/tags.js';
+export type { TagsBinding, ReplaceTagsInput } from './bindings/tags.js';
 export type {
   VectorsBinding,
   VectorQueryInput,
@@ -170,6 +183,10 @@ export type {
   QueryFlowStateInput,
   FlowState,
 } from './bindings/flows.js';
+export type {
+  ScheduleBinding,
+  ScheduleInput,
+} from './bindings/schedule.js';
 
 // =====================================================================
 // Shared types

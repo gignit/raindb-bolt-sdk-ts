@@ -18,18 +18,23 @@
     { "method": "GET", "path": "/echo-stream", "handler": "onEchoStream", "streaming": true },
     { "method": "POST", "path": "/object-roundtrip", "handler": "onObjectRoundtrip" },
     { "method": "GET", "path": "/keys-walk", "handler": "onKeysWalk" },
-    { "method": "GET", "path": "/sql-probe", "handler": "onSqlProbe" }
+    { "method": "GET", "path": "/sql-probe", "handler": "onSqlProbe" },
+    { "method": "POST", "path": "/tag-roundtrip/:id", "handler": "onTagRoundtrip" },
+    { "method": "POST", "path": "/expire/:id", "handler": "onExpireDroplet" },
+    { "method": "POST", "path": "/write-batch", "handler": "onWriteBatch" },
+    { "method": "POST", "path": "/schedule", "handler": "onScheduleCallback" }
   ],
   "capabilities": {
     "raindb": {
       "formations": [
-        { "id": "agent-graph", "ops": ["read", "write", "list"] }
+        { "id": "agent-graph", "ops": ["read", "write", "list", "tag", "expire"] }
       ],
       "secrets": { "names": ["upstream-key", "session-secret"] },
       "buckets": [
         { "name": "tenant-standard", "ops": ["object-read", "object-write"] }
       ],
-      "sqlRead": true
+      "sqlRead": true,
+      "schedule": true
     },
     "network": {
       "egress": ["api.example.com"]

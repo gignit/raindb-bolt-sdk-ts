@@ -78,6 +78,15 @@ export const BINDING = {
   db_resolveFormation: 'ctx.db.resolveFormation',
   db_expire: 'ctx.db.expire',
   db_expirationDays: 'ctx.db.expirationDays',
+  /**
+   * LIVE since v0.3.0. The substrate installed tag/untag on
+   * `ctx.db` (not a separate `ctx.tags` namespace); the canonical
+   * binding strings reflect that. The legacy `tags_tag` / etc
+   * constants remain for the SDK-level `tags.*` wrapper's
+   * error.binding labels.
+   */
+  db_tag: 'ctx.db.tag',
+  db_untag: 'ctx.db.untag',
 
   sql_query: 'ctx.sql.query',
 
@@ -117,6 +126,17 @@ export const BINDING = {
   formations_warm: 'ctx.formations.warm',
 
   flows_queryState: 'ctx.flows.queryState',
+
+  // === LIVE since v0.3.0 (substrate Wave 2.5 commit f934956) ===
+  //
+  // `ctx.schedule` is bolt-level (not formation-scoped); capability
+  // gate is the manifest's `capabilities.raindb.schedule: true`
+  // boolean (per runtime.OpSchedule). The substrate-side denial
+  // message is `ctx.schedule: schedule capability not declared...`
+  // -- it does NOT match CAPABILITY_DENIAL_REGEX's formation-shape,
+  // so a capability denial falls through to a plain RainDBBoltError
+  // carrying `binding: "ctx.schedule"` and the original message.
+  schedule: 'ctx.schedule',
 } as const;
 
 /**

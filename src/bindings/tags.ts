@@ -1,95 +1,154 @@
-// bindings/tags.ts -- STUBBED ctx.tags.* surface.
-// Audit §L (Gap 7).
+// bindings/tags.ts -- ergonomic ctx.tags.* surface.
 //
-// Note: the audit and the @raindb/agent's `entity_tag` tool diverge on
-// the tag shape -- the audit proposes `string[]` (tag set), while
-// agent's entity_tag uses `Record<string, string>` (tag map). We
-// follow the audit's proposed shape since it's the substrate-side
-// canonical (Go `Client.TagEntity(ctx, formationID, scopeValue, tags
-// []string)`). When the substrate ships, if the goja side standardizes
-// on a different shape, the package bumps minor version.
+// Per audit §L (Gap 7), the original stub assumed a separate
+// `ctx.tags` goja namespace. The substrate-side Tier 2 work
+// (commit eee3eac) instead installed `ctx.db.tag` /
+// `ctx.db.untag` on the existing db namespace. There is NO
+// substrate-side `ctx.tags` namespace today.
+//
+// To preserve the v0.1 ergonomic surface (`tags.tag(...)`) while
+// honoring the substrate's actual contract, the wrappers here
+// route through the LIVE `db.tag` / `db.untag` wrappers. Bolts
+// can use either import:
+//
+//   import { tags } from '@raindb/bolt-sdk';
+//   await tags.tag('agent-graph', 'a-1', { env: 'prod' });
+//
+//   // equivalent
+//   import { db } from '@raindb/bolt-sdk';
+//   await db.tag({ formationId: 'agent-graph', scopeValue: 'a-1', tags: { env: 'prod' } });
+//
+// Wave 3A shape divergences from v0.1 stubs (per CHANGELOG):
+//
+// 1. `tag` argument type is now `Record<string, string>`, NOT
+//    `string[]`. The substrate's tag store is S3-tag-shaped
+//    (key=value pairs).
+//
+// 2. `untag` takes a `string[]` of tag KEY names to remove (not
+//    values). The v0.1 stub used the same `string[]` parameter
+//    for both, which couldn't distinguish add-keys from remove-keys.
+//
+// 3. `replaceTags` stays STUBBED -- the substrate did not ship
+//    a native replaceTags binding (the SDK has TagEntity additive
+//    and UntagEntity key-removal but no atomic replace). The stub
+//    throws BindingNotInstalled with a hint that bolts emulate
+//    it client-side via untag(oldKeys) + tag(newTags) when
+//    non-atomic replace is acceptable.
 
+import { db, type TagInput, type UntagInput } from './db.js';
 import { resolveCtx } from '../runtime/ctx-resolver.js';
 import { stubOrDispatch } from '../runtime/binding-not-installed.js';
 import { BINDING } from '../internal/constants.js';
 
-export interface TagInput {
-  formationId: string;
-  scopeValue: string;
-  tags: string[];
-}
-
 /**
- * Bolt-facing shape of `ctx.tags` -- raw goja surface (STUB).
+ * Bolt-facing shape of `ctx.tags` -- the goja sandbox does NOT
+ * install a `ctx.tags` namespace today (Wave 2 Tier 2 routed tag
+ * mutations through `ctx.db.tag` / `ctx.db.untag` instead). This
+ * type stays optional on BoltContext so older bolts that import
+ * the namespace type compile; runtime calls route through `db.*`.
  */
 export interface TagsBinding {
-  tag?: (input: TagInput) => Promise<void>;
-  untag?: (input: TagInput) => Promise<void>;
-  replaceTags?: (input: TagInput) => Promise<void>;
+  /**
+   * STUB ONLY -- no substrate binding ships under `ctx.tags`.
+   * The SDK wrapper routes through `ctx.db.tag` instead. This
+   * field exists for type-import backwards compatibility.
+   */
+  replaceTags?: (input: { formationId: string; scopeValue: string; tags: Record<string, string> }) => Promise<void>;
 }
 
 /**
- * STUB (audit §L Gap 7). Per-entity tag set. Tags survive across
- * revisions and are used by the vector index for filtering and by
- * the periscope tier for tag-aware indexes.
+ * Re-export of the canonical TagInput shape from `db.ts`. Kept
+ * here so `import { tags, TagInput } from '@raindb/bolt-sdk'`
+ * continues to compile on consumers that already use the type.
+ */
+export type { TagInput, UntagInput };
+
+/**
+ * Input shape for {@link tags.replaceTags} (STUB).
+ */
+export interface ReplaceTagsInput {
+  formationId: string;
+  scopeValue: string;
+  tags: Record<string, string>;
+}
+
+/**
+ * The `tags` namespace -- ergonomic three-arg wrappers over the
+ * `db.tag` / `db.untag` named-args API.
+ *
+ * - {@link tag} and {@link untag} are LIVE (route through db.* which
+ *   route through `ctx.db.tag` / `ctx.db.untag`).
+ * - {@link replaceTags} stays STUBBED -- the substrate does not
+ *   ship a native atomic replace. Bolts that don't need atomicity
+ *   can emulate via `await db.untag(...)` then `await db.tag(...)`.
+ *
+ * @example
+ * ```ts
+ * import { tags } from '@raindb/bolt-sdk';
+ * await tags.tag('agent-graph', 'a-018f...', { env: 'prod', tier: 'gold' });
+ * await tags.untag('agent-graph', 'a-018f...', ['tier']);
+ * ```
  */
 export const tags = {
   /**
-   * STUB. Add tags to an entity (additive).
-   * @throws BindingNotInstalled
+   * Add tag key=value pairs to an entity (additive).
+   *
+   * LIVE since v0.3.0 (routes through `db.tag`, which routes
+   * through the substrate's `ctx.db.tag` -- commit eee3eac).
+   *
+   * @requires capability: `tag` on the formation
+   * @throws CapabilityDenied
+   * @throws BindingNotInstalled on pre-eee3eac runtime
    */
   async tag(
     formationId: string,
     scopeValue: string,
-    tagList: string[],
+    tags: Record<string, string>,
   ): Promise<void> {
-    const ctx = resolveCtx();
-    return stubOrDispatch<void>(
-      BINDING.tags_tag,
-      () =>
-        (ctx as unknown as { tags?: TagsBinding }).tags?.tag,
-      (fn) =>
-        (fn as (i: TagInput) => Promise<void>)({
-          formationId,
-          scopeValue,
-          tags: tagList,
-        }),
-      { formationId, scopeValue, count: tagList.length },
-    );
+    const input: TagInput = { formationId, scopeValue, tags };
+    await db.tag(input);
   },
 
   /**
-   * STUB. Remove specified tags from an entity.
-   * @throws BindingNotInstalled
+   * Remove tag KEYS from an entity. Idempotent.
+   *
+   * LIVE since v0.3.0 (routes through `db.untag`, which routes
+   * through the substrate's `ctx.db.untag` -- commit eee3eac).
+   *
+   * @requires capability: `tag` on the formation
+   * @throws CapabilityDenied
+   * @throws BindingNotInstalled on pre-eee3eac runtime
    */
   async untag(
     formationId: string,
     scopeValue: string,
-    tagList: string[],
+    tagKeys: string[],
   ): Promise<void> {
-    const ctx = resolveCtx();
-    return stubOrDispatch<void>(
-      BINDING.tags_untag,
-      () =>
-        (ctx as unknown as { tags?: TagsBinding }).tags?.untag,
-      (fn) =>
-        (fn as (i: TagInput) => Promise<void>)({
-          formationId,
-          scopeValue,
-          tags: tagList,
-        }),
-      { formationId, scopeValue, count: tagList.length },
-    );
+    const input: UntagInput = { formationId, scopeValue, tagKeys };
+    await db.untag(input);
   },
 
   /**
-   * STUB. Replace the entity's full tag set.
-   * @throws BindingNotInstalled
+   * STUB (audit §L Gap 7). The substrate did not ship a native
+   * atomic replaceTags binding -- the SDK exposes TagEntity
+   * (additive) and UntagEntity (key-removal) only. For
+   * non-atomic replace, emulate client-side:
+   *
+   * ```ts
+   * // 1. read the entity's current tags somehow (the bolt knows them)
+   * // 2. untag the keys you no longer want
+   * await db.untag({ formationId, scopeValue, tagKeys: oldKeysToRemove });
+   * // 3. tag the new set (overwrites any keys you re-supply)
+   * await db.tag({ formationId, scopeValue, tags: newTagSet });
+   * ```
+   *
+   * @throws BindingNotInstalled when substrate does not (and
+   *   currently does not) ship a native replace binding
    */
   async replaceTags(
     formationId: string,
     scopeValue: string,
-    tagList: string[],
+    tags: Record<string, string>,
   ): Promise<void> {
     const ctx = resolveCtx();
     return stubOrDispatch<void>(
@@ -97,12 +156,12 @@ export const tags = {
       () =>
         (ctx as unknown as { tags?: TagsBinding }).tags?.replaceTags,
       (fn) =>
-        (fn as (i: TagInput) => Promise<void>)({
+        (fn as (i: ReplaceTagsInput) => Promise<void>)({
           formationId,
           scopeValue,
-          tags: tagList,
+          tags,
         }),
-      { formationId, scopeValue, count: tagList.length },
+      { formationId, scopeValue, count: Object.keys(tags).length },
     );
   },
 };
