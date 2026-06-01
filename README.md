@@ -181,6 +181,61 @@ If you have an existing bolt written in plain JavaScript using `ctx.db.readLates
 
 The compiled output is functionally equivalent. The gain is dev-time type safety + clean error discrimination.
 
+## Dev loop: local Vite + live deployed bolt
+
+The most productive dev loop for a bolt that ships a frontend is to
+keep the React app on `localhost` (HMR, fast iteration) while pointing
+every API call at the **already-deployed** bolt on devz. No local
+server, no local key, no env file -- the live bolt holds its own
+secrets and serves real data.
+
+`vite.config.js` does the work:
+
+```js
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+
+export default defineConfig({
+  plugins: [react()],
+  build: {
+    // Emit every asset as a hashed file under dist/assets/ (no data:
+    // URL inlining). The bolt mirrors dist/assets/ to S3 as static
+    // droplets; you want them as files there, not inlined into the JS
+    // bundle.
+    assetsInlineLimit: 0,
+  },
+  server: {
+    port: 4001,
+    proxy: {
+      '/api':  { target: 'https://<your-bolt>.devz.raindb.gignit.com', changeOrigin: true, secure: true },
+      '/auth': { target: 'https://<your-bolt>.devz.raindb.gignit.com', changeOrigin: true, secure: true },
+    },
+  },
+});
+```
+
+Iteration:
+
+```bash
+# 1. edit React code; Vite HMR pushes the change immediately
+# 2. when satisfied, build + ship to the live bolt:
+cd client && npm run build
+cp -r dist ../bolt/client/dist
+cd ../bolt
+raindb-cli --profile <yours> lightning bolt deploy <bolt-name>
+# ~5s -> the live URL now serves the new revision
+```
+
+The bolt-side handler that consumes this layout is the standard
+"serve dynamic /api/* via onHttpRequest, serve static /* from
+client/dist/" pattern -- exactly what `setCtx(ctx)` plus the
+`onHttpRequest` signature in this SDK is built for.
+
+**Cache gotcha:** the bolt sends `cache-control: max-age=60` on
+`index.html`. Within a minute of `deploy`, the canonical URL may
+still hand out the prior HTML. Append `?v=$(date +%s)` to bust the
+cache when verifying, or just wait 60s.
+
 ## Compatibility
 
 | `@raindb/bolt-sdk` | raindb-lightning bolt runtime          | `@raindb/agent`     |
