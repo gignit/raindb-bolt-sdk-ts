@@ -26,6 +26,7 @@ import type { JwtBinding } from '../bindings/jwt.js';
 import type { CryptoBinding } from '../bindings/crypto.js';
 import type { CookiesBinding } from '../bindings/cookies.js';
 import type { IamBinding } from '../bindings/iam.js';
+import type { AuthBinding } from '../bindings/auth.js';
 import type { ResponseBinding } from '../bindings/response.js';
 import type { TokenBinding } from '../bindings/token.js';
 import type { StatsBinding } from '../bindings/stats.js';
@@ -102,6 +103,24 @@ export interface BoltContext {
   readonly crypto: CryptoBinding;
   readonly cookies: CookiesBinding;
   readonly iam: IamBinding;
+  /**
+   * Per-request authentication surface. Read-only view onto the
+   * AuthContext the lightning dispatcher resolved at request
+   * boundary via the SAME GrantValidator raindb-api's
+   * auth_middleware uses.
+   *
+   * LIVE since v0.4.0 (substrate commit 7bf58b6). Marked
+   * optional for backwards-compat with older lightning binaries
+   * (pre-7bf58b6 substrate did not install this); the wrapper
+   * guards by checking `ctx.auth !== undefined` before reading
+   * scalars / invoking predicates and returns the safe defaults
+   * (empty strings, false) when missing.
+   *
+   * See bindings/auth.ts for the surface contract +
+   * ~/src/raindb-phoenix-lightning/docs/work/bolt-iam-unified-gate.md
+   * for the architecture.
+   */
+  readonly auth?: AuthBinding;
   /**
    * Streaming response surface. Present only when the handler is
    * dispatched on a `streaming: true` route; for non-streaming

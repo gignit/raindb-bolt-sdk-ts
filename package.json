@@ -1,6 +1,6 @@
 {
   "name": "@raindb/bolt-sdk",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Typed bindings over the goja sandbox for Lightning Bolt handlers. Mirrors the goja binding surface in @raindb/lightning. Zero runtime overhead beyond promise dispatch.",
   "private": true,
   "type": "module",

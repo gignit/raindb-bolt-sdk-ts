@@ -16,7 +16,7 @@
 // =====================================================================
 // Version constant -- mirrors package.json. Update both together.
 // =====================================================================
-export const VERSION = '0.3.0';
+export const VERSION = '0.4.0';
 
 // =====================================================================
 // Runtime helpers (the ambient ctx resolver)
@@ -37,6 +37,8 @@ export { jwt } from './bindings/jwt.js';
 export { crypto } from './bindings/crypto.js';
 export { cookies } from './bindings/cookies.js';
 export { iam } from './bindings/iam.js';
+// --- LIVE since v0.4.0 (substrate commit 7bf58b6 -- unified IAM gate) ---
+export { auth } from './bindings/auth.js';
 export { response } from './bindings/response.js';
 
 // --- LIVE since v0.3.0 (substrate Wave 2.5 commit f934956) ---
@@ -100,6 +102,7 @@ export type {
   WireTokenMintOptions,
   WireTokenResource,
 } from './bindings/iam.js';
+export type { AuthBinding } from './bindings/auth.js';
 export type { ResponseBinding } from './bindings/response.js';
 export type {
   TokenBinding,

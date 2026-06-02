@@ -49,6 +49,25 @@ export const BINDING = {
 
   iam_mintWireToken: 'ctx.iam.mintWireToken',
 
+  // === ctx.auth -- LIVE since v0.4.0 (substrate commit 7bf58b6) ===
+  //
+  // The auth namespace exposes the per-request AuthContext that the
+  // lightning dispatcher resolved by running the SAME GrantValidator
+  // raindb-api's auth_middleware runs. The bolt's read-only surface
+  // gates in-process privileged bindings (ctx.iam.mintWireToken,
+  // future ctx.db.write to other tenants) via the user's actual
+  // grant. ONE gate, two entry points (api + lightning), same
+  // enforcement.
+  //
+  // Scalar accessors (tenantId, subject, apiClientId, isAnonymous)
+  // are property reads -- no binding name needed (no possible
+  // BindingNotInstalled at read time).
+  //
+  // Predicates carry binding names so capability denials translate
+  // through the standard error pipeline.
+  auth_permits: 'ctx.auth.permits',
+  auth_permitsWireKeySubscribe: 'ctx.auth.permitsWireKeySubscribe',
+
   response_write: 'ctx.response.write',
   response_setHeader: 'ctx.response.setHeader',
   response_beginStream: 'ctx.response.beginStream',
