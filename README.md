@@ -1,14 +1,62 @@
 # @raindb/bolt-sdk
 
-Typed bindings for Lightning Bolt handler authors. Zero runtime overhead.
+Typed bindings for RainDB Lightning Bolt handler authors.
 
-## What this is
+A TypeScript NPM package giving you a typed, ergonomic API over the
+goja sandbox bindings that bolts run inside. The package's runtime
+cost is approximately zero -- at runtime, the compiled JS calls
+`ctx.*` directly. The value is at dev time: types, completion,
+typed error classes, IntelliSense everywhere.
 
-A TypeScript NPM package giving you a typed, ergonomic API over the goja sandbox bindings that RainDB Lightning Bolts use at runtime. Write bolt handlers with full IntelliSense, type safety, and typed error discrimination.
+This README is the canonical guide for writing a bolt that uses
+every RainDB capability: data IO, LLM-driven chat with SSE streaming,
+authentication staircases that can build entire SaaS products on top
+of RainDB IAM, secrets, scheduled work, and the agent loop.
 
-The package's runtime cost is ~zero: at runtime, the compiled JS calls `ctx.*` directly. The package's value is at **dev time** -- types, completion, refactoring, typed error classes.
+---
 
-## Quick start
+## Table of contents
+
+1. [What a bolt is](#what-a-bolt-is)
+2. [Quick start: 30-line bolt](#quick-start-30-line-bolt)
+3. [Anatomy of a bolt directory](#anatomy-of-a-bolt-directory)
+4. [The `ctx` object: every binding you have](#the-ctx-object-every-binding-you-have)
+5. [LLM integration via `@raindb/agent`](#llm-integration-via-raindbagent)
+6. [SSE streaming responses](#sse-streaming-responses)
+7. [IAM: from "I just need login" to "I'm building a SaaS"](#iam-from-i-just-need-login-to-im-building-a-saas)
+8. [Error handling](#error-handling)
+9. [Capabilities, secrets, deployment](#capabilities-secrets-deployment)
+10. [Dev loop: local Vite + live deployed bolt](#dev-loop-local-vite--live-deployed-bolt)
+11. [Compatibility + versioning](#compatibility--versioning)
+12. [Marketplace inventory](#marketplace-inventory)
+13. [See also](#see-also)
+
+---
+
+## What a bolt is
+
+A bolt is a TypeScript handler bundle that runs inside RainDB
+Lightning's goja sandbox. Each bolt:
+
+- Is **tenant-scoped**: every droplet read/write goes through the
+  tenant prefix automatically. No multi-tenancy plumbing in your code.
+- Is **sandboxed**: no `process`, no `fs`, no surprise globals. Only
+  the `ctx` object the runtime hands you.
+- Is **invocation-isolated**: per-request state lives in the
+  invocation; cross-request state lives in formations or secrets.
+- Is **declaratively configured**: `capabilities.json` says what
+  formations / secrets / network you touch. The runtime enforces it.
+
+You write the handler. RainDB provides everything else: database
+(S3-backed formations), cache (object cache + wire mesh), pub/sub
+(droplet writes -> SSE wakeups), vector DB (chunks + embeddings
+formations), LLM agent runtime (`@raindb/agent`), real-time streaming
+(SSE), auth (`ctx.iam.mintWireToken`, `ctx.jwt`, `ctx.crypto`),
+secrets manager, scheduled jobs, and the periscope datalake cascade.
+
+---
+
+## Quick start: 30-line bolt
 
 ```typescript
 // bolt/server/src/index.ts
@@ -28,76 +76,819 @@ export async function onHttpRequest(
 ): Promise<BoltResponse> {
   setCtx(ctx);
 
-  const id = req.params['id'];
-  if (!id) return { status: 400, body: 'missing id' };
+  if (req.method === 'GET' && req.path.startsWith('/api/agent/')) {
+    const id = req.path.slice('/api/agent/'.length);
+    try {
+      const agent = await db.readLatest({
+        formationId: 'agent-graph',
+        indexId: 'by-id-latest',
+        scopeValue: id,
+      });
+      if (agent === null) return { status: 404, body: { error: 'not found' } };
+      log.info('agent read', { id });
+      return { status: 200, body: agent };
+    } catch (e) {
+      if (e instanceof CapabilityDenied) {
+        return { status: 403, body: `bolt missing ${e.op} on ${e.formationId}` };
+      }
+      throw e;
+    }
+  }
 
-  try {
-    const agent = await db.readLatest({
-      formationId: 'agent-graph',
-      indexId: 'by-id-latest',
-      scopeValue: id,
-    });
-    if (agent === null) {
-      return { status: 404, body: { error: 'not found' } };
-    }
-    log.info('agent read', { id });
-    return { status: 200, body: agent };
-  } catch (e) {
-    if (e instanceof CapabilityDenied) {
-      return {
-        status: 403,
-        body: `bolt missing ${e.op} on ${e.formationId}`,
-      };
-    }
-    throw e;
+  return { status: 404, body: 'not found' };
+}
+```
+
+**The `setCtx(ctx)` call is the required first line of every
+handler.** It registers the invocation's `ctx` so subsequent calls
+into `db.*`, `log.*`, `auth.*` resolve through it. Skip it and the
+SDK throws `RainDBBoltError("setCtx not called")` on the first
+wrapper call.
+
+Deploy:
+
+```bash
+cd bolt
+raindb-cli --profile <yours> lightning bolt deploy --name my-bolt \
+  --source . --routes ./routes.json \
+  --capabilities ./capabilities.json --deployment ./deployment.json \
+  --domain my-bolt.<env>.raindb.gignit.com
+```
+
+(Pass `--routes ./routes.json` explicitly the first time. The CLI
+cache picks it up and the short form `lightning bolt deploy <name>`
+works on subsequent deploys.)
+
+---
+
+## Anatomy of a bolt directory
+
+```
+<project-root>/        # this directory IS the bolt (the deploy --source)
+  server/
+    index.ts           # exports onHttpRequest, onSchedule, onWakeUp, ...
+  client/              # optional -- omit for a server-only / headless bolt
+    dist/              # static SPA assets the bolt serves
+  config/              # capabilities.json, routes.json, deployment.json
+  formations/          # bolt-bundled formation configs + schemas (optional)
+  dist/main.js         # built server bundle (esbuild --format=cjs)
+```
+
+### Standard layout (follow this; everything else is an escape hatch)
+
+A bolt is just a **directory with a server entry**. The standard, recommended
+layout an agent should scaffold and assume:
+
+- **`server/index.ts`** -- the handler (`onHttpRequest`, ...). This is the one
+  required thing; it makes the directory a bolt.
+- **`client/`** -- the frontend, built to `client/dist`. **Optional**: omit it
+  entirely for a server-only / API / webhook / scheduled bolt.
+- **`config/`** -- `capabilities.json`, `routes.json`, `deployment.json`. These
+  are passed to `deploy` via `--capabilities`/`--routes`/`--deployment` and may
+  live anywhere; `config/` is the convention. (Routes are optional under
+  `--auto-routes`.)
+- **`formations/`** -- the data model. Optional.
+
+**Where you run from:** the **project root is the bolt** (`deploy --source .`),
+and `raindb-cli` auto-discovers it -- run `lightning bolt deploy` from the root
+or any subdirectory and it finds the bolt by walking up to the git project
+root. No `--source` needed for the standard layout.
+
+**Escape hatches** (only for nonstandard layouts): `--source <dir>` to point at
+a bolt somewhere else, `--entry <path>` for a server entry not at
+`server/index.ts` (auto-detect order: `server/index.{ts,js}`,
+`src/index.{ts,js}`, `index.{ts,js}`), `--client-dist <path>` for a client not
+at `client/dist`. An agent following the standard layout never needs these.
+
+The full legacy form (config files at the bolt root instead of `config/`) also
+works -- the deploy flags take any path -- but the layout above is the one to
+scaffold.
+
+### `routes.json`
+
+```json
+{
+  "sse": [
+    { "path": "/api/v1/wire/subscribe" }
+  ],
+  "routes": [
+    { "method": "POST", "path": "/api/chat/sessions/:sid/messages", "handler": "onHttpRequest", "streaming": true },
+    { "method": "GET",  "path": "/api/*", "handler": "onHttpRequest" },
+    { "method": "POST", "path": "/api/*", "handler": "onHttpRequest" }
+  ],
+  "static": [
+    { "path": "/assets/*", "publicAsset": "assets/" },
+    { "path": "/*",        "publicAsset": "index.html" }
+  ]
+}
+```
+
+Route resolution is FIRST MATCH. Declare SSE routes first, streaming
+routes next (with `streaming: true`), then the buffered API catch-all,
+then static.
+
+**The `streaming: true` flag is critical.** It tells lightning to
+take the streaming dispatch path -- which sets `text/event-stream`
+headers, disables proxy buffering, and wires `ctx.response.write`
+into your handler so you can pump SSE frames in real time. Without
+the flag, the handler returns a buffered `BoltResponse` and clients
+see all the events at once when the handler completes.
+
+Common mistake: declaring streaming routes correctly in `routes.json`
+but deploying the bolt via the short-form `bolt deploy <name>` when
+the CLI cache has `autoRoutes: true` (set by a prior
+`--auto-routes` deploy). The cache wins; auto-routes drops every
+per-route flag including `streaming: true`. Always pass `--routes
+./routes.json` explicitly the first time you deploy a bolt with
+streaming routes -- the cache then preserves the path for short-form
+deploys.
+
+### `capabilities.json`
+
+```json
+{
+  "raindb": {
+    "formations": [
+      { "id": "agent-graph", "ops": ["read", "write"] },
+      { "id": "session",     "ops": ["read", "write"] }
+    ],
+    "secrets":   { "names": ["openai_api_key", "session-secret"] },
+    "actions":   ["enqueue"],
+    "wire":      { "subscribe": [{ "formationId": "agent-graph", "ops": ["read"] }] }
+  },
+  "network": {
+    "fetch": { "allowedHosts": ["api.openai.com"] }
+  },
+  "limits": {
+    "cpuMs":    5000,
+    "memoryMb": 128,
+    "wallMs":   30000
   }
 }
 ```
 
-The `setCtx(ctx)` call is the **required first line of every handler**. It registers the invocation's `ctx` so subsequent calls into `db.*`, `log.*`, etc. resolve through it. Skipping it means the SDK throws `RainDBBoltError("setCtx not called")` on the first wrapper call.
+If your handler calls a binding for a formation/secret/host you didn't
+declare, the runtime throws `CapabilityDenied` (caught with
+`instanceof`).
 
-## What you get
+### `deployment.json`
 
-- **IntelliSense everywhere.** Every binding namespace is fully typed. Hover any method to see its signature.
-- **Typed error classes.** `catch (e) { if (e instanceof TokenExists) { ... } }`. Discriminate on actual error types, not magic strings.
-- **Zero runtime overhead.** The package compiles to thin promise wrappers around the goja bindings. At runtime your bolt is the same speed as if you wrote raw `ctx.*` calls.
-- **Stable API surface.** Mirrors the goja binding contract; changes follow the same versioning as the substrate.
-- **Cross-validated against `@raindb/agent`.** Input/output types are structurally compatible with `@raindb/agent`'s tool catalogs so the two packages compose without translation.
+```json
+{
+  "engine":     "goja",
+  "entrypoint": "dist/main.js",
+  "mount":      "/",
+  "healthcheck": "/api/health"
+}
+```
 
-## API surface (v0.1.0)
+---
 
-| Namespace      | Status   | Methods                                                                                |
-|----------------|----------|----------------------------------------------------------------------------------------|
-| `log`          | LIVE     | `info`, `warn`, `error`                                                                |
-| `db`           | LIVE     | `readLatest`, `readDroplet`, `writeDroplet`, `listDroplets`                            |
-| `db` (cont'd)  | STUB     | `listKeys`, `listSince`, `writeBatch`, `readAt`, `readCurrent`, `resolveFormation`, `expire`, `expirationDays` |
-| `fetch`        | LIVE     | (callable)                                                                             |
-| `secrets`      | LIVE     | `get`                                                                                  |
-| `ids`          | LIVE     | `uuidv7`                                                                               |
-| `jwt`          | LIVE     | `sign`, `verify`                                                                       |
-| `crypto`       | LIVE     | `hashPassword`, `verifyPassword`, `randomBytes`                                        |
-| `cookies`      | LIVE     | `parse`, `build`                                                                       |
-| `iam`          | LIVE     | `mintWireToken`                                                                        |
-| `response`     | LIVE     | `setHeader`, `beginStream`, `write` (streaming routes only)                            |
-| `token`        | STUB     | `write`, `claim`, `read`, `delete`, `deleteAll`                                        |
-| `stats`        | STUB     | `increment`, `set`, `batch`, `drain`                                                   |
-| `objects`      | STUB     | `get`, `put`, `exists`, `delete`                                                       |
-| `sql`          | STUB     | `query`                                                                                |
-| `relay`        | STUB     | `write`, `read`, `updateStatus`, `spawnChild`, `writeLog`, `enqueueToken`, `dequeueToken` |
-| `actions`      | STUB     | `dispatch`, `invoke`                                                                   |
-| `tags`         | STUB     | `tag`, `untag`, `replaceTags`                                                          |
-| `vectors`      | STUB     | `query`, `queryByText`, `deleteFormation`                                              |
-| `files`        | STUB     | `reserveUpload`, `reserveDownload`, `pushPublic`, `readMeta`                           |
-| `catalog`      | STUB     | `insert`, `list`, `tree`, `delete` (TBD), `update` (TBD), `transfer` (TBD)             |
-| `formations`   | STUB     | `describe`, `list`, `warm`                                                             |
-| `flows`        | STUB     | `queryState`                                                                           |
+## The `ctx` object: every binding you have
 
-LIVE = the substrate ships this binding today; the wrapper dispatches through.
-STUB = the wrapper ships now with the eventual shape; calling it at runtime throws `BindingNotInstalled` until the substrate-side native binding lands. See `~/src/raindb-phoenix-lightning/docs/AUDIT_BOLT_SDK_GAPS.md` for the substrate-side roadmap and `BOLT_SDK_COORDINATION.md` for the live ship-status ledger.
+The bolt context is the entire environment your handler sees. Every
+binding below is either LIVE (substrate ships it today) or STUB
+(wrapper compiles + ships, substrate-side pending; throws
+`BindingNotInstalled` at runtime until landed).
+
+### LIVE bindings
+
+| Namespace      | Methods                                                                                      |
+|----------------|----------------------------------------------------------------------------------------------|
+| `log`          | `info`, `warn`, `error`                                                                      |
+| `db`           | `readLatest`, `readDroplet`, `writeDroplet`, `listDroplets`                                  |
+| `fetch`        | `(method, url, headers, body) -> {status, headers, body}` -- HTTPS-only, capability-gated  |
+| `secrets`      | `get(name)`                                                                                  |
+| `ids`          | `uuidv7()`                                                                                   |
+| `jwt`          | `sign(secretName, claims, expiresInSec)`, `verify(secretName, token)`                        |
+| `crypto`       | `hashPassword(pw, cost?)`, `verifyPassword(pw, hash)`, `randomBytes(n?)`                     |
+| `cookies`      | `parse(headerValue)`, `build(name, value, opts)`                                             |
+| `iam`          | `mintWireToken({ subject, resources, ttlSec })` -- mint per-user wire-key tokens for SSE   |
+| `auth`         | `tenantId`, `subject`, `apiClientId`, `isAnonymous`, `permits(...)`, `permitsWireKeySubscribe(...)` -- per-request grant inspection |
+| `response`     | `setHeader`, `beginStream`, `write` -- streaming routes only                                |
+| `schedule`     | `Schedule(formationId, actionRef, runAfterMs, payload)` -- enqueue a deferred bolt callback |
+
+### STUB bindings (wrapper ships, substrate-side pending)
+
+| Namespace      | Methods                                                                                          |
+|----------------|--------------------------------------------------------------------------------------------------|
+| `db` (cont'd)  | `listKeys`, `listSince`, `writeBatch`, `readAt`, `readCurrent`, `resolveFormation`, `expire`     |
+| `token`        | `write`, `claim`, `read`, `delete`, `deleteAll`                                                  |
+| `stats`        | `increment`, `set`, `batch`, `drain`                                                             |
+| `objects`      | `get`, `put`, `exists`, `delete`                                                                 |
+| `sql`          | `query`                                                                                          |
+| `relay`        | `write`, `read`, `updateStatus`, `spawnChild`, `writeLog`, `enqueueToken`, `dequeueToken`        |
+| `actions`      | `dispatch`, `invoke`                                                                             |
+| `vectors`      | `query`, `queryByText`, `deleteFormation`                                                        |
+| `files`        | `reserveUpload`, `reserveDownload`, `pushPublic`, `readMeta`                                     |
+| `catalog`      | `insert`, `list`, `tree`                                                                         |
+| `formations`   | `describe`, `list`, `warm`                                                                       |
+| `flows`        | `queryState`                                                                                     |
+
+A STUB binding throws `BindingNotInstalled` at runtime until the
+substrate ships it. Your code compiles; deployment requires the
+native binding to be present.
+
+### Examples
+
+**Database read (tenant-scoped automatically):**
+
+```typescript
+import { db } from '@raindb/bolt-sdk';
+
+const session = await db.readLatest({
+  formationId: 'session',
+  indexId:     'by-id-latest',
+  scopeValue:  sessionId,
+});
+// returns the envelope { schemaVersion, tenantId, dropletId, payload, ... }
+// or null if no current droplet exists
+```
+
+**Write a droplet (writes go through SDK envelope generation):**
+
+```typescript
+const dropletId = await db.writeDroplet({
+  formationId: 'session',
+  payload: {
+    sessionId,
+    userId,
+    createdAt: new Date().toISOString(),
+  },
+});
+```
+
+**Outbound HTTP (with allowed-host gate):**
+
+```typescript
+import { fetch as boltFetch } from '@raindb/bolt-sdk';
+
+const { status, body } = await boltFetch({
+  method:  'POST',
+  url:     'https://api.openai.com/v1/embeddings',
+  headers: { 'authorization': `Bearer ${apiKey}`, 'content-type': 'application/json' },
+  body:    JSON.stringify({ model: 'text-embedding-3-small', input: text }),
+});
+```
+
+The bolt's `capabilities.network.fetch.allowedHosts` gate fires
+BEFORE the DNS lookup -- requests to undeclared hosts throw
+`CapabilityDenied` instantly.
+
+**Schedule a deferred callback:**
+
+```typescript
+import { schedule } from '@raindb/bolt-sdk';
+
+await schedule.Schedule({
+  formationId: 'session-cleanup',
+  actionRef:   'expireStaleSessions',
+  runAfterMs:  3600 * 1000,
+  payload:     { sweepId: ctx.ids.uuidv7() },
+});
+```
+
+The runtime invokes `onSchedule(ctx, { formationId, actionRef,
+payload })` on your bolt at the scheduled time.
+
+---
+
+## LLM integration via `@raindb/agent`
+
+`@raindb/bolt-sdk` ships an optional sub-module
+`@raindb/bolt-sdk/agent-bridge` that builds an `AgentHost` for
+`@raindb/agent`'s `runAgent` loop. Substrate-touching tool calls
+(droplet_*, vector_search, etc.) are intercepted at the host's
+`fetch` boundary and dispatched through native bindings -- no HTTP
+self-loops back through the gateway. LLM provider calls
+(`chatCompletion`) go through `ctx.fetch` because those are
+genuinely external HTTP.
+
+### Minimal LLM chat handler
+
+```typescript
+import { setCtx, BoltContext, BoltRequest, BoltResponse } from '@raindb/bolt-sdk';
+import { makeBoltNativeHost } from '@raindb/bolt-sdk/agent-bridge';
+import { runAgent, tenantTools } from '@raindb/agent';
+
+export async function onHttpRequest(
+  ctx: BoltContext,
+  req: BoltRequest,
+): Promise<BoltResponse> {
+  setCtx(ctx);
+
+  if (req.method !== 'POST' || req.path !== '/api/chat') {
+    return { status: 404, body: 'not found' };
+  }
+
+  const body = req.json as { message: string; history?: unknown[] };
+
+  const result = await runAgent({
+    systemPrompt: 'You are a helpful assistant for this project.',
+    userPrompt:   body.message,
+    history:      (body.history ?? []) as never,
+    ctx: {
+      creds: {
+        apiKey:   await ctx.secrets.get('platform-api-key'),
+        endpoint: await ctx.secrets.get('platform-api-endpoint'),
+      },
+      host:   makeBoltNativeHost(ctx),
+      role:   'read',
+      userId: ctx.auth?.subject ?? 'anonymous',
+    },
+    tools:        tenantTools,
+    maxIterations: 8,
+  });
+
+  return {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      content:    result.content,
+      iterations: result.iterations,
+      durationMs: result.durationMs,
+    }),
+  };
+}
+```
+
+The agent loop resolves the chat model automatically via raindb's
+`llmRegistry` (cached 5min per API key). Override with `model: 'gpt-5'`
+to pin a specific model.
+
+`@raindb/agent` is declared as an OPTIONAL peer dependency. Bolts
+that don't run LLM agents don't need it installed.
+
+See [`@raindb/agent`'s README](../raindb-agent-ts/README.md) for the
+full tool catalog, custom-tool authoring, and chatCompletion shape.
+
+### Streaming LLM chat with SSE (recommended)
+
+Pair the agent loop with `streaming: true` + `ctx.response.write` so
+the browser sees per-event progress instead of a single end-of-handler
+chunk. See [SSE streaming responses](#sse-streaming-responses) below
+for the full pattern.
+
+---
+
+## SSE streaming responses
+
+Lightning's streaming dispatch path turns your handler into a
+real-time event source. Two pieces:
+
+1. **Route declares `streaming: true`** in `routes.json`. The
+   dispatcher takes the streaming code path: sets
+   `content-type: text/event-stream`, `cache-control: no-cache`,
+   `connection: keep-alive`, `x-accel-buffering: no` BEFORE invoking
+   your handler. Spawns a fasthttp StreamWriter goroutine that pumps
+   each `ctx.response.write` call to the wire AND flushes
+   immediately.
+
+2. **Handler calls `ctx.response.write`** (or the SDK's typed
+   `response.write` wrapper) for each frame. Each call hits the wire
+   as a separate network packet. The handler returns an empty body
+   when done -- the runtime asserts streamed-AND-empty-body.
+
+### Minimal streaming handler
+
+```typescript
+import { setCtx, response, BoltContext, BoltRequest, BoltResponse } from '@raindb/bolt-sdk';
+
+function frame(event: string, data: unknown): string {
+  return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+}
+
+export async function onHttpRequest(
+  ctx: BoltContext,
+  req: BoltRequest,
+): Promise<BoltResponse> {
+  setCtx(ctx);
+
+  if (req.method !== 'POST' || req.path !== '/api/stream') {
+    return { status: 404, body: 'not found' };
+  }
+
+  await response.setHeader('content-type', 'text/event-stream');
+  await response.setHeader('cache-control', 'no-cache, no-transform');
+  await response.beginStream(200);
+
+  for (let i = 1; i <= 5; i += 1) {
+    await response.write(frame('tick', { i, at: Date.now() }));
+    // Simulate work; in real handlers you await DB / fetch / etc.
+  }
+  await response.write(frame('done', { ok: true }));
+
+  return { status: 200, headers: {}, body: '' };
+}
+```
+
+### Streaming LLM agent dispatch (the canonical pattern)
+
+```typescript
+import { setCtx, response, BoltContext, BoltRequest, BoltResponse } from '@raindb/bolt-sdk';
+import { makeBoltNativeHost } from '@raindb/bolt-sdk/agent-bridge';
+import { runAgent, tenantTools, type AgentEvent } from '@raindb/agent';
+
+function sseFrame(event: string, data: unknown): string {
+  return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+}
+
+export async function onHttpRequest(
+  ctx: BoltContext,
+  req: BoltRequest,
+): Promise<BoltResponse> {
+  setCtx(ctx);
+
+  if (req.method !== 'POST' || req.path !== '/api/chat') {
+    return { status: 404, body: 'not found' };
+  }
+
+  const body = req.json as { message: string };
+
+  // Streaming-route gate: ctx.response is only wired when
+  // routes.json declared `streaming: true`. Bolts that ship the
+  // same handler for streaming + non-streaming routes branch here.
+  const streaming = ctx.response !== undefined;
+  if (streaming) {
+    await response.setHeader('content-type', 'text/event-stream');
+    await response.setHeader('cache-control', 'no-cache, no-transform');
+    await response.setHeader('connection', 'keep-alive');
+    await response.beginStream(200);
+  }
+
+  const frames: string[] = [];
+  const send = (e: AgentEvent | { type: string; data?: unknown }) => {
+    const wire = sseFrame(e.type, e);
+    if (streaming) {
+      void response.write(wire);
+    } else {
+      frames.push(wire);
+    }
+  };
+
+  try {
+    const result = await runAgent({
+      systemPrompt: 'You are a helpful assistant.',
+      userPrompt:   body.message,
+      ctx: {
+        creds: {
+          apiKey:   await ctx.secrets.get('platform-api-key'),
+          endpoint: await ctx.secrets.get('platform-api-endpoint'),
+        },
+        host:   makeBoltNativeHost(ctx),
+        role:   'read',
+        userId: ctx.auth?.subject ?? 'anonymous',
+      },
+      tools:   tenantTools,
+      onEvent: send,
+    });
+    send({ type: 'done', data: { iterations: result.iterations } });
+  } catch (err) {
+    send({ type: 'error', data: { error: err instanceof Error ? err.message : String(err) } });
+  }
+
+  if (streaming) {
+    return { status: 200, headers: {}, body: '' };
+  }
+  return {
+    status: 200,
+    headers: {
+      'content-type':  'text/event-stream',
+      'cache-control': 'no-cache, no-transform',
+      'connection':    'keep-alive',
+    },
+    body: frames.join(''),
+  };
+}
+```
+
+The agent loop emits one `AgentEvent` per phase
+(`thinking`, `tool-call`, `tool-result`, `tool-error`, `final`).
+The handler forwards each to the wire as one SSE frame. The browser
+sees progressive thinking, tool announcements, and the final reply
+arrive in real time.
+
+### Client-side: consume the stream
+
+```typescript
+const res = await fetch('/api/chat', {
+  method:  'POST',
+  headers: { 'content-type': 'application/json' },
+  body:    JSON.stringify({ message: 'hello' }),
+});
+const reader = res.body!.getReader();
+const decoder = new TextDecoder();
+let buf = '';
+
+while (true) {
+  const { value, done } = await reader.read();
+  if (done) break;
+  buf += decoder.decode(value, { stream: true });
+  let end: number;
+  while ((end = buf.indexOf('\n\n')) >= 0) {
+    const frame = buf.slice(0, end);
+    buf = buf.slice(end + 2);
+    const eventMatch = frame.match(/^event:\s*(\S+)/);
+    const dataMatch  = frame.match(/^data:\s*(.+)$/m);
+    if (eventMatch && dataMatch) {
+      const payload = JSON.parse(dataMatch[1]!);
+      handleEvent(eventMatch[1]!, payload);
+    }
+  }
+}
+```
+
+`EventSource` works too -- but it only supports GET, and many SSE
+chat endpoints are POST (the request carries the prompt). The
+`fetch` + `getReader` pattern above is what `joshua-vs-wopr` and
+`fdn-app` ship.
+
+### Verifying SSE wired correctly
+
+Probe with chrome-devtools or a tiny script:
+
+```typescript
+const startMs = performance.now();
+const res = await fetch('/api/chat', { method: 'POST', ... });
+const headers = Object.fromEntries(res.headers.entries());
+// Look for these:
+//   content-type:       'text/event-stream'  (NOT 'text/plain; charset=utf-8, text/event-stream')
+//   x-accel-buffering:  'no'
+//   content-length:     should be ABSENT
+// If you see content-length OR a duplicate content-type prefix, the
+// route is NOT going through the streaming dispatch path. Check
+// (a) routes.json has streaming:true on the route, (b) the deployed
+// bolt confirms it via `raindb-cli lightning bolt info <name> -o json`,
+// (c) the CLI cache doesn't have stale autoRoutes:true.
+```
+
+### Common SSE pitfalls
+
+- **`streaming: true` missing from `routes.json`**: handler runs
+  through the buffered path; browser sees one chunk at the end.
+- **CLI cache has `autoRoutes: true`**: cache wins over `routes.json`;
+  per-route flags are dropped. Pass `--routes ./routes.json` once to
+  fix.
+- **Handler returns a body and calls `response.write`**: lightning
+  asserts streamed-AND-empty-body and throws. Pick one shape per
+  handler.
+- **Handler writes events too close together**: goja's async-Promise
+  machinery may batch writes within a single event-loop tick. Inject
+  a `Promise.resolve().then()` between events that fire less than ~5ms
+  apart if you need crisp progressive arrival.
+- **Handler does work AFTER the last `response.write` and before
+  returning**: that work delays the connection close, but the bytes
+  are already on the wire -- a no-op for the browser, but it
+  occupies a server handler slot. Keep the post-stream work minimal.
+
+---
+
+## IAM: from "I just need login" to "I'm building a SaaS"
+
+RainDB IAM is layered so bolts can adopt as much or as little as they
+need. The full stack:
+
+| Layer | Mechanism | Use when |
+|---|---|---|
+| 1. JWT cookies | `ctx.jwt.sign` + `ctx.crypto.hashPassword` | You just need username/password login for your bolt's users |
+| 2. `ctx.auth` per-request grant | `ctx.auth.tenantId`, `.subject`, `.permits(...)` | You want the substrate to enforce per-user authorization on EVERY droplet call |
+| 3. Wire-token mint for SSE | `ctx.iam.mintWireToken({ subject, resources, ttlSec })` | You want the browser to subscribe directly to S3 key changes for real-time push |
+| 4. Cross-tenant grant chains | `ctx.iam.mintScopedGrant` (via raindb-api) | You're building a portal that brokers between MULTIPLE downstream tenants (e.g. fdn-app, raindb-app) |
+
+### Layer 1: bolt-owned username + password login
+
+For a bolt that wants its OWN identity model (basic SaaS),
+write user records into a formation and validate
+username/password yourself. The bolt is the source of truth for
+auth.
+
+```typescript
+// POST /api/auth/register
+const { username, password } = req.json;
+const passwordHash = await crypto.hashPassword(password);
+const userId = ctx.ids.uuidv7();
+await db.writeDroplet({
+  formationId: 'app-users',
+  payload: { userId, username, passwordHash, createdAt: new Date().toISOString() },
+});
+return { status: 201, body: { userId } };
+
+// POST /api/auth/login
+const user = await db.readLatest({
+  formationId: 'app-users',
+  indexId:     'by-username-latest',
+  scopeValue:  username,
+});
+if (!user?.payload) return { status: 401, body: 'invalid' };
+const ok = await crypto.verifyPassword(password, user.payload.passwordHash);
+if (!ok) return { status: 401, body: 'invalid' };
+
+// Mint your own session JWT
+const token = await jwt.sign('session-secret', {
+  sub:  user.payload.userId,
+  iat:  Math.floor(Date.now() / 1000),
+}, 86400);
+
+const setCookie = await cookies.build('session', token, {
+  path: '/', httpOnly: true, secure: true, sameSite: 'Lax', maxAge: 86400,
+});
+return { status: 200, headers: { 'Set-Cookie': setCookie }, body: { ok: true } };
+
+// On subsequent requests:
+const jar = await cookies.parse(req.headers['cookie'] ?? '');
+const claims = await jwt.verify('session-secret', jar['session'] ?? '');
+const userId = claims.sub;  // <-- use this as the authorization anchor
+```
+
+This is the entire SaaS-on-RainDB auth pattern: bolt owns the user
+table, bolt mints the cookie, bolt validates the cookie on every
+request. **Crucially: the userId from the validated JWT MUST be the
+control on every subsequent DB read/write** -- this is how you stop
+user A from reading user B's data. Pattern:
+
+```typescript
+// Filter every write by the authenticated userId
+const messageId = ctx.ids.uuidv7();
+await db.writeDroplet({
+  formationId: 'app-messages',
+  payload: {
+    messageId,
+    userId,                 // <-- authenticated from the cookie, NOT from req.body
+    content: req.json.content,
+    createdAt: new Date().toISOString(),
+  },
+});
+
+// Filter every read by the authenticated userId via the index
+const myMessages = await db.listKeys({
+  formationId: 'app-messages',
+  indexId:     'by-userId-latest',
+  prefix:      userId,
+  first:       50,
+});
+```
+
+**Anti-pattern**: trusting `userId` from the request body. Every
+sensitive write MUST anchor on the userId you extracted from the
+verified cookie/JWT/header. RainDB formations don't enforce row-level
+authorization out of the box -- that's the bolt's job.
+
+### Layer 2: substrate-validated grants via `ctx.auth`
+
+If you'd rather let the SUBSTRATE enforce authorization (so bad
+bolt code can't accidentally leak data), pair the bolt with
+RainDB's mint-flow. The browser presents an `rgr1.<...>` grant
+on every request. Lightning's dispatcher validates it before your
+handler runs and surfaces the result on `ctx.auth`:
+
+```typescript
+import { auth, db } from '@raindb/bolt-sdk';
+
+export async function onHttpRequest(ctx, req) {
+  setCtx(ctx);
+
+  if (ctx.auth?.isAnonymous) {
+    return { status: 401, body: 'unauthenticated' };
+  }
+
+  // ctx.auth.tenantId is the USER's tenant (where their data lives).
+  // For a portal bolt hosted on platform-bolts serving Joshua on chess,
+  // ctx.auth.tenantId === chess. The bolt's host tenant lives on
+  // ctx.bolt.tenantId.
+  const userTenantId = ctx.auth!.tenantId;
+  const userId       = ctx.auth!.subject;
+
+  // Optionally pre-check before doing work
+  if (!ctx.auth!.permits('formation', 'private-notes', 'read')) {
+    return { status: 403, body: 'forbidden' };
+  }
+
+  const notes = await db.listDroplets({
+    formationId: 'private-notes',
+    prefix:      userId,
+    pageSize:    50,
+  });
+  return { status: 200, body: notes };
+}
+```
+
+The substrate-side `scopedObjectStore` decorator validates every S3
+key your handler tries to read or write against the grant's resource
+list. A bolt that tries to read `tenants/other-user/...` with a grant
+scoped to its own tenant gets a hard `403` from the runtime --
+regardless of whether the bolt JS code thought it was authorized.
+
+### Layer 3: wire-token mint for browser-direct SSE
+
+To let the browser subscribe to S3 key changes directly (real-time
+push without polling), mint a short-lived wire-token in the handler
+and hand it to the browser:
+
+```typescript
+import { iam } from '@raindb/bolt-sdk';
+
+const wireToken = await iam.mintWireToken({
+  subject: ctx.auth!.subject,
+  resources: [
+    {
+      type: 'wire-key',
+      id:   `tenants/${ctx.auth!.tenantId}/entities/app-messages/by-userId-latest/${userId}/latest.json`,
+      ops:  ['subscribe'],
+    },
+  ],
+  ttlSec: 3600,
+});
+
+return { status: 200, body: { wireToken } };
+```
+
+The browser opens an `EventSource` to
+`https://api.<env>.raindb.gignit.com/sse?token=<rgr1.*>` and the
+SSE gateway pushes a wakeup every time the matching chain-head
+S3 object changes. The mint is gated by the same 3-rule check
+(`wire-key:subscribe` OR `formation:read` OR `tenant:admin`) your
+bolt's grant satisfies -- so users can ONLY mint subscriptions for
+keys their grant authorizes.
+
+### Layer 4: cross-tenant SaaS portal patterns
+
+If you're building a SaaS like fdn-app or raindb-app -- a bolt
+hosted on `platform-bolts` that serves users from MANY downstream
+tenants -- you mint per-user grants targeting each downstream
+tenant. The pattern (executed via raindb-api's `mintScopedGrant`
+mutation):
+
+```typescript
+// 1. User logs in via /api/auth/login (bolt-owned username/password)
+// 2. Bolt fetches the user's chosen tenant from the platform-tenant
+//    user record (raindb-app's authentication staircase pattern)
+// 3. Bolt calls raindb-api's mintScopedGrant via ctx.fetch with the
+//    bolt's host credential as the parent grant:
+
+const mintRes = await ctx.fetch({
+  method: 'POST',
+  url:    `${ctx.secrets.get('platform-api-endpoint')}/graphql`,
+  headers: {
+    'authorization': `Bearer ${platformBoltsCredential}`,
+    'content-type':  'application/json',
+  },
+  body: JSON.stringify({
+    query: 'mutation($input: MintScopedGrantInput!) { mintScopedGrant(input: $input) { token jti } }',
+    variables: {
+      input: {
+        targetTenantId:      pickedTenantId,
+        subject:             userId,
+        subjectConstraint:   'SOURCE_IDENTITY_BOUND',
+        resources: [{ type: 'tenant', id: pickedTenantId, ops: ['read', 'write'] }],
+        ttlSec:              86400,
+      },
+    },
+  }),
+});
+
+// 4. Store the minted grant in the bolt's session (formation-backed)
+// 5. Every subsequent request from this user uses the picked-tenant
+//    grant -- ctx.auth.tenantId now shows the user's tenant, NOT the
+//    bolt's host tenant
+```
+
+The canonical authentication-staircase pattern (login -> workspace ->
+group -> tenant -> portal-enter) plus the SaaS-on-RainDB user-table
+shape is published as the **`raindb/user-auth-email`** pack on the
+marketplace -- a `usageIntent: "reference"` pack you can install on
+your own tenant as a starting point:
+
+```bash
+raindb-cli --profile <yours> pack info raindb/user-auth-email
+raindb-cli --profile <yours> pack get  raindb/user-auth-email > /tmp/pack.json
+# install onto a tenant at create time:
+raindb-admin --profile <admin> tenant create --name=my-saas \
+    --additional-packs=raindb/tenant-base,raindb/foundation,raindb/user-auth-email
+```
+
+See [Marketplace inventory](#marketplace-inventory) below for the full
+list of packs and which apply to which use cases.
+
+### Recap: pick the right layer
+
+| You want... | Use... |
+|---|---|
+| Username/password login for your app's users | `crypto` + `jwt` + `cookies` (Layer 1) |
+| Substrate-enforced authorization on every droplet call | `ctx.auth.tenantId` + `ctx.auth.permits` + delegate to lightning's gate (Layer 2) |
+| Real-time browser push from S3 changes | `iam.mintWireToken` (Layer 3) |
+| Multi-tenant SaaS portal that brokers user access to many tenants | `mintScopedGrant` via raindb-api (Layer 4) |
+
+Layers compose. A SaaS bolt commonly uses ALL FOUR:
+Layer 1 for the bolt-owned user table, Layer 2 for substrate-validated
+per-user grants on each request, Layer 3 for SSE wire-tokens, Layer 4
+to broker access to the picked tenant.
+
+---
 
 ## Error handling
 
-Every binding wrapper translates substrate-side errors to typed classes. Catch with `instanceof`:
+Every binding wrapper translates substrate-side errors to typed
+classes. Catch with `instanceof`:
 
 ```typescript
 import {
@@ -117,7 +908,6 @@ try {
   if (e instanceof TokenExists) {
     // already initialized; safe to ignore in init paths
   } else if (e instanceof BindingNotInstalled) {
-    // substrate-side hasn't shipped ctx.token yet
     log.warn('token binding pending', { e: String(e) });
   } else if (e instanceof RainDBBoltError) {
     log.error('sdk error', { binding: e.binding, msg: e.message });
@@ -128,68 +918,104 @@ try {
 }
 ```
 
-`RainDBBoltError.binding` carries the canonical binding name (e.g. `"ctx.db.readLatest"`) for log correlation.
+`RainDBBoltError.binding` carries the canonical binding name
+(e.g. `"ctx.db.readLatest"`) for log correlation.
 
-## Running LLM agents inside a bolt
+---
 
-`@raindb/bolt-sdk` ships a sub-module `@raindb/bolt-sdk/agent-bridge` that builds an `AgentHost` for `@raindb/agent`'s `runAgent`. Substrate-touching tool calls (droplet_*, etc.) are intercepted at the host's `fetch` boundary and dispatched through native bindings -- no HTTP self-loops.
+## Capabilities, secrets, deployment
 
-```typescript
-import { setCtx } from '@raindb/bolt-sdk';
-import { makeBoltNativeHost } from '@raindb/bolt-sdk/agent-bridge';
-import { runAgent, tenantTools } from '@raindb/agent';
+### Declaring secrets
 
-export async function onHttpRequest(ctx, req) {
-  setCtx(ctx);
-  const result = await runAgent({
-    host: makeBoltNativeHost(ctx),
-    tools: tenantTools,
-    messages: req.json.messages,
-  });
-  return { status: 200, body: result };
+```json
+{
+  "raindb": {
+    "secrets": { "names": ["openai_api_key", "session-secret"] }
+  }
 }
 ```
 
-The bolt code reads like normal agent code; the perf win (no kernel network stack overhead per call) is invisible at the call site.
+Set the secret at deploy time:
 
-`@raindb/agent` is declared as an OPTIONAL peer dependency. Bolts that don't run LLM agents don't need it installed.
-
-## Stubbed bindings
-
-Some surfaces are stubbed -- the wrapper ships with full types, but the substrate-side native binding has not yet landed. Calling a stubbed binding throws `BindingNotInstalled` at runtime with a message pointing at the audit gap card:
-
-```
-ctx.sql.query is not installed in this bolt runtime. The @raindb/bolt-sdk
-wrapper is shipped; the substrate-side binding is pending. See
-~/src/raindb-phoenix-lightning/docs/AUDIT_BOLT_SDK_GAPS.md for the gap
-card that owns this surface, and ~/src/raindb-phoenix-lightning/docs/
-BOLT_SDK_COORDINATION.md for current substrate ship status.
+```bash
+raindb-cli --profile <yours> lightning secrets set openai_api_key \
+  --value sk-... --bolt my-bolt
+raindb-cli --profile <yours> lightning secrets set session-secret \
+  --value $(openssl rand -hex 32) --bolt my-bolt
 ```
 
-When the substrate-side ships a binding, the package version bumps from `0.x` to `0.x+1` (semver minor), the wrapper swaps from "type-only stub" to "documented as live" in CHANGELOG.md, and consumers get the new capability by upgrading.
+Read at runtime:
 
-Bolt code that uses a stubbed surface compiles successfully today; deployment requires the native binding to be present.
+```typescript
+import { secrets } from '@raindb/bolt-sdk';
+const apiKey = await secrets.get('openai_api_key');
+```
 
-## Migration from raw `ctx.*` calls
+The secret's value lives in the `lightning-secrets` formation on the
+bolt's host tenant, encrypted under the realm's KMS key. Bolt code
+never sees the plaintext until `secrets.get` returns.
 
-If you have an existing bolt written in plain JavaScript using `ctx.db.readLatest(...)`, migrating to `@raindb/bolt-sdk` is:
+### Declaring formations
 
-1. Add the dependency.
-2. Add `setCtx(ctx)` as the first line of each handler.
-3. Replace `ctx.db.readLatest(formationId, indexId, scopeValue)` with `db.readLatest({ formationId, indexId, scopeValue })` (named-args object).
-4. Wrap binding calls in `try/catch` and discriminate with `instanceof`.
+Two patterns:
 
-The compiled output is functionally equivalent. The gain is dev-time type safety + clean error discrimination.
+**Reference an existing formation** (already on your tenant via a pack
+install):
+
+```json
+{ "raindb": { "formations": [
+  { "id": "fdn-chat-sessions", "ops": ["read", "write"] }
+]}}
+```
+
+**Bundle a new formation in the bolt** (lands on the tenant at deploy):
+
+```
+bolt/formations/app-users/
+  config.json          # FormationConfig: pathTemplate, schemaVersion, indexes
+  schemas/v1.json      # JSON Schema for the payload
+```
+
+```json
+// bolt/formations/app-users/config.json
+{
+  "formationId":   "app-users",
+  "pathTemplate":  "tenants/{{.tenantId}}/entities/app-users/{{.scopeValue}}/{{.dropletId}}.json",
+  "schemaVersion": "1.0.0",
+  "indexes": [
+    { "id": "by-id-latest",       "scope": "userId",   "keyType": "pointer-latest" },
+    { "id": "by-username-latest", "scope": "username", "keyType": "pointer-latest" }
+  ]
+}
+```
+
+### deployment.json
+
+```json
+{
+  "engine":      "goja",
+  "entrypoint":  "dist/main.js",
+  "mount":       "/",
+  "healthcheck": "/api/health",
+  "limits": {
+    "cpuMs":    5000,
+    "memoryMb": 128,
+    "wallMs":   30000
+  }
+}
+```
+
+---
 
 ## Dev loop: local Vite + live deployed bolt
 
-The most productive dev loop for a bolt that ships a frontend is to
-keep the React app on `localhost` (HMR, fast iteration) while pointing
-every API call at the **already-deployed** bolt on devz. No local
-server, no local key, no env file -- the live bolt holds its own
-secrets and serves real data.
+The most productive dev loop for a bolt with a frontend is to keep
+the React app on `localhost` (Vite HMR) while pointing every API call
+at the **already-deployed** bolt on devx/devz. No local server, no
+local key, no env file -- the live bolt holds its own secrets and
+serves real data.
 
-`vite.config.js` does the work:
+`vite.config.js`:
 
 ```js
 import { defineConfig } from 'vite';
@@ -198,17 +1024,17 @@ import react from '@vitejs/plugin-react';
 export default defineConfig({
   plugins: [react()],
   build: {
-    // Emit every asset as a hashed file under dist/assets/ (no data:
-    // URL inlining). The bolt mirrors dist/assets/ to S3 as static
-    // droplets; you want them as files there, not inlined into the JS
-    // bundle.
+    // Emit every asset as a hashed file under dist/assets/ instead
+    // of inlining sub-4KB assets as data: URLs. The bolt mirrors
+    // dist/assets/ to S3 as static droplets -- you want them as
+    // files, not inlined into the JS bundle.
     assetsInlineLimit: 0,
   },
   server: {
     port: 4001,
     proxy: {
-      '/api':  { target: 'https://<your-bolt>.devz.raindb.gignit.com', changeOrigin: true, secure: true },
-      '/auth': { target: 'https://<your-bolt>.devz.raindb.gignit.com', changeOrigin: true, secure: true },
+      '/api':  { target: 'https://<your-bolt>.<env>.raindb.gignit.com', changeOrigin: true, secure: true },
+      '/auth': { target: 'https://<your-bolt>.<env>.raindb.gignit.com', changeOrigin: true, secure: true },
     },
   },
 });
@@ -220,31 +1046,33 @@ Iteration:
 # 1. edit React code; Vite HMR pushes the change immediately
 # 2. when satisfied, build + ship to the live bolt:
 cd client && npm run build
+rm -rf ../bolt/client/dist
 cp -r dist ../bolt/client/dist
 cd ../bolt
 raindb-cli --profile <yours> lightning bolt deploy <bolt-name>
 # ~5s -> the live URL now serves the new revision
 ```
 
-The bolt-side handler that consumes this layout is the standard
-"serve dynamic /api/* via onHttpRequest, serve static /* from
-client/dist/" pattern -- exactly what `setCtx(ctx)` plus the
-`onHttpRequest` signature in this SDK is built for.
-
 **Cache gotcha:** the bolt sends `cache-control: max-age=60` on
-`index.html`. Within a minute of `deploy`, the canonical URL may
-still hand out the prior HTML. Append `?v=$(date +%s)` to bust the
-cache when verifying, or just wait 60s.
+`index.html` by default. Within a minute of `deploy`, the canonical
+URL may still hand out the prior HTML. Append `?v=$(date +%s)` to
+bust the cache when verifying, or just wait 60s. CSS/JS/image assets
+are content-hashed so they don't have this problem.
 
-## Compatibility
+---
 
-| `@raindb/bolt-sdk` | raindb-lightning bolt runtime          | `@raindb/agent`     |
-|--------------------|----------------------------------------|---------------------|
-| 0.1.x              | 1.0.x (the LIVE bindings live today)   | 0.7.x (optional)    |
-| 0.2.x (planned)    | 1.1.x (post-v0.4 token+stats)          | 0.8.x               |
-| 1.0.x (target)     | 1.5.x (all gap cards landed)           | 1.0.x               |
+## Compatibility + versioning
 
-The compatibility table is the source of truth; pin both `@raindb/bolt-sdk` and the bolt's `raindb-lightning` runtime accordingly.
+| `@raindb/bolt-sdk` | raindb-lightning bolt runtime      | `@raindb/agent`     |
+|--------------------|-------------------------------------|---------------------|
+| 0.1.x              | 1.0.x (initial LIVE bindings)       | 0.7.x (optional)    |
+| 0.4.x (current)    | 1.0.x + `ctx.auth` + `ctx.response` | 0.8.x               |
+| 1.0.x (target)     | 1.5.x (all gap cards landed)        | 1.0.x               |
+
+Pin both `@raindb/bolt-sdk` and the bolt's lightning runtime to a
+compatible row.
+
+---
 
 ## Building
 
@@ -256,15 +1084,145 @@ npm run build       # produces dist/
 npm pack            # produces a tarball with dist/, README.md, CHANGELOG.md only
 ```
 
-The `test/integration/example-bolt/` directory is the canonical "smallest complete bolt using @raindb/bolt-sdk" reference. It compiles cleanly under the same TypeScript strictness the package uses (`exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`, full strict mode). To run its e2e suite against devz, set `RAINDB_DEVZ_PROFILE=<profile-name>` and run `npm run test:e2e` from the bolt's directory; without that env var the suite skips cleanly.
+The `test/integration/example-bolt/` directory is the canonical
+"smallest complete bolt using @raindb/bolt-sdk" reference. It
+compiles cleanly under the same TypeScript strictness the package
+uses (`exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`, full
+strict mode). To run its e2e suite against devz, set
+`RAINDB_DEVZ_PROFILE=<profile-name>` and run `npm run test:e2e` from
+the bolt's directory; without that env var the suite skips cleanly.
 
-## License
+---
 
-Internal (private package). Public license TBD when the package goes public.
+## Marketplace inventory
+
+Every formation declaration, data-model template, and authoring
+pattern your bolt builds on top of is published as a **marketplace
+pack**. Browse with `raindb-cli pack list`; install onto a tenant
+with `raindb-admin tenant create --additional-packs <vendor>/<pack>`
+at create time, or via the `POST /api/marketplace/install`
+endpoint after the tenant exists.
+
+The on-disk authoring source for every `raindb`-vendored pack is
+`~/src/raindb-base/vendors/raindb/packs/<pack>/` -- each pack ships
+its own `README.md`, the formation declarations under `formations/`,
+and (where applicable) a `*PATTERNS.md` or `TROUBLESHOOTING.md`
+guide. Read those when you're designing a feature similar to what
+the pack already covers.
+
+Each pack carries a `usageIntent` field that signals its role:
+
+| `usageIntent`   | Meaning                                                                         |
+|-----------------|---------------------------------------------------------------------------------|
+| `production`    | **SYSTEM PACK.** The platform installs or expects this. Treat as built-in.     |
+| `example`       | **EXAMPLE PACK.** Drop-in worked example for a domain. Copy, adapt, fork.      |
+| `reference`     | **REFERENCE PACK.** Canonical implementation of a pattern (e.g. email auth).    |
+| `pattern`       | **PATTERN GUIDE.** Documentation pack -- read it, don't install it.            |
+| `experimental`  | Active development; API may change between minor versions.                      |
+
+### System packs (`usageIntent: "production"`)
+
+These ship with the platform. Your tenant has most of them by
+default; the rest install at tenant-create time via the realm's
+`defaultTenantBlueprint.packs[]`. Don't fork them; just consume.
+
+| Pack | What it gives you |
+|---|---|
+| `raindb/core` | The platform-realm + env config + bridge-machinery formations the substrate itself runs on. Includes `platform-marketplace-{pack,vendor,credential}` (the marketplace catalog) and the realm-blueprint formations. |
+| `raindb/platform-runtime` | Genesis provisioner config + AWS environment binding. Realm-genesis-level wiring. |
+| `raindb/platform-services` | Cyclone / scheduler / wire / cache shared service formations -- the infrastructure your bolt rides on. |
+| `raindb/tenant-base` | Per-tenant infrastructure: `lightning-secrets`, `lightning-bolts`, `lightning-bolt-stats`. Every tenant has these. Your bolt uses these to store secrets + register itself. |
+| `raindb/lightning` | Platform-side bolt deployment formations. The dispatcher reads from these to route requests to your bolt. |
+| `raindb/foundation` | The full document-RAG stack: `fdn-documents`, `fdn-chunks`, `fdn-embeddings`, `fdn-projects`, `fdn-folders`, `fdn-chat-sessions`, `fdn-chat-messages`, `fdn-coworkers`, `fdn-memberships`. Install this when your bolt does RAG over user-uploaded documents. Depends on `raindb/tenant-base`. |
+
+### Example packs (`usageIntent: "example"`)
+
+Domain-shaped starter formations you can install on a fresh tenant
+and customize. The pack's `README.md` walks through the data model;
+the `formations/` directory has the declarations.
+
+| Pack | Domain | What's inside |
+|---|---|---|
+| `raindb/social` | Chat + social patterns | `direct-message`, `direct-message-conversation`, `live-chat-conversation`, `live-chat-message`, `user-profile`, `post`, `comment`, `reaction`, `friendship`. Read `CHAT_PATTERNS.md` for the asc/desc/poll cursor pattern and `TROUBLESHOOTING.md` for the bugs the reference build surfaced (empty bubbles, duplicate keys, mid-stream content clobbering, etc). |
+| `raindb/media-photos` | Photo + album with binary float pipeline | Reference for the float pipeline + image-asset lifecycle. |
+| `raindb/finance-transactions` | Ledger | Multi-index transaction formation (`by-account`, `by-status`, `by-date`) with the parquet view cache pattern. |
+| `raindb/real-estate-listings` | MLS-shaped listings | Property + property-image formations, multi-index (`by-id`, `by-owner`, `by-status`, `by-state`). |
+
+### Reference packs (`usageIntent: "reference"`)
+
+Canonical implementations of common features. Install as-is for the
+behaviour, or copy the pattern into your own formation.
+
+| Pack | Pattern |
+|---|---|
+| `raindb/user-auth-email` | Email + password user identity. The canonical username/password authentication pattern (Layer 1 IAM in this README). Secret-field handling for the password hash + indexed credential lookup. Install when you want a SaaS-on-RainDB user table. |
+
+### Pattern guides (`usageIntent: "pattern"`)
+
+Documentation packs. Don't install; read.
+
+| Pack | Topic |
+|---|---|
+| `raindb/guide-patterns` | The canonical RainDB design-patterns guide. Dual-UUID write contract, S3 key layout, access tier hierarchy, formation config (indexes / floats / flows / funnels), write/read patterns at all four tiers, denormalization, S3-first probing, immutable documents, digest pipeline, enrichment modes. **Read this first when designing a new formation.** |
+
+### Discovering packs
+
+```bash
+# List the full catalog (your env's marketplace tenant returns
+# whatever has been seeded into platform-marketplace-pack).
+raindb-cli --profile <yours> pack list
+
+# Filter by usageIntent:
+raindb-cli --profile <yours> pack list --usage-intent=example
+raindb-cli --profile <yours> pack list --usage-intent=production
+
+# Filter by category:
+raindb-cli --profile <yours> pack list --category=social
+raindb-cli --profile <yours> pack list --category=system
+
+# Search by tag / description / title:
+raindb-cli --profile <yours> pack list --search="auth"
+
+# Detail view of one pack (with README + features + files):
+raindb-cli --profile <yours> pack info raindb/foundation
+raindb-cli --profile <yours> pack get  raindb/foundation > /tmp/foundation.json
+```
+
+The on-disk authoring sources for every `raindb`-vendored pack live
+under `~/src/raindb-base/vendors/raindb/packs/<pack>/`. Each pack
+ships its own `README.md` (the human guide), `formations/<fid>/`
+(the declarations the marketplace install publishes onto your
+tenant), and where relevant a `*PATTERNS.md` / `TROUBLESHOOTING.md`
+companion.
+
+---
 
 ## See also
 
-- `~/src/raindb-phoenix-lightning/docs/HANDOFF_RAINDB_BOLT_SDK_TS.md` -- the constitutional spec
-- `~/src/raindb-phoenix-lightning/docs/AUDIT_BOLT_SDK_GAPS.md` -- substrate-side roadmap
-- `~/src/raindb-phoenix-lightning/docs/BOLT_SDK_COORDINATION.md` -- live binding ship-status ledger
-- `~/src/raindb-agent-ts/` -- sister package; LLM tool catalog over GraphQL
+- [`@raindb/agent`](../raindb-agent-ts/README.md) -- LLM agent loop +
+  tool catalog. Sister package; this README's LLM section is a quick
+  start, the agent README is the full guide.
+- `~/src/raindb-base/README.md` -- the marketplace authoring source
+  (vendor + pack publishing model, the seeding pipeline, formation
+  publish vs pack publish vs marketplace install).
+- `~/src/raindb-base/vendors/raindb/packs/guide-patterns/` -- the
+  canonical RainDB design-patterns guide. Read this BEFORE designing
+  your own formation.
+- `~/src/raindb-base/vendors/raindb/packs/<pack>/README.md` -- the
+  per-pack guide for every pack in the table above. The `social`,
+  `foundation`, and `user-auth-email` READMEs are especially worth
+  reading as a bolt author.
+- Reference bolts (public starter repos):
+  - `github.com/gignit/joshua-vs-wopr` -- minimal LLM bolt: chess +
+    chat, SSE streaming, ~700 LOC. Best read first.
+  - `github.com/gignit/super-calculator` -- streaming agent UI +
+    multi-tool LLM loop.
+  - `github.com/gignit/fdn-app` -- production RAG: documents,
+    multi-project, multi-user, agent + tool calls, full SPA.
+
+---
+
+## License
+
+Internal (private package). Public license TBD when the package goes
+public.
