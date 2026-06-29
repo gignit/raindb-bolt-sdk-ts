@@ -13,15 +13,17 @@
 // from the v0.1 stub (no breaking change to handler call-sites)
 // while threading the opts through to the native binding.
 //
-// Two shape divergences from the v0.1 stub, called out in the
-// CHANGELOG:
+// Shape contract:
 //
-//   1. `SqlResult.rows` is `unknown[][]` (positional rows) -- the
-//      substrate returns `[][]any` per the GraphQL SQLResult shape
-//      that `executeSQL` projects. The v0.1 stub typed it as
-//      `Array<Record<string, unknown>>` (named rows) which did not
-//      match the substrate. Field lookups are positional via
-//      `result.columns.indexOf(name)`.
+//   1. `SqlResult.rows` is `Array<Record<string, unknown>>` (named
+//      rows) -- each row is a column-keyed object, IDENTICAL to what
+//      the GraphQL `executeSQL` resolver returns (it zips the duckdb
+//      positional rows into `map[string]any` in sqlResultToGQL).
+//      ctx.sql.query and executeSQL are parity surfaces, so a bolt
+//      reads `row[column]` the same way on both. (An earlier SDK
+//      iteration typed this positional `unknown[][]` on the mistaken
+//      belief that executeSQL was positional too; the substrate has
+//      since been aligned so BOTH return named objects.)
 //
 //   2. `SqlFreshnessRow` (the entries of `SqlResult.latest`) now
 //      mirrors the substrate's `FormationLatest` shape:
@@ -102,18 +104,19 @@ export interface SqlFreshnessRow {
  * Result of {@link sql.query}. Mirrors the substrate's
  * `runtime.SQLResult` projection.
  *
- * `rows` is POSITIONAL (`unknown[][]`) -- each row is an array
- * aligned with the `columns[]` order. To look up a named column,
- * compute `columns.indexOf(name)` once and index each row by the
- * resulting position. This matches the GraphQL `SQLResult.rows`
- * shape so the bolt-side wrapper is a drop-in replacement for the
- * `ctx.fetch->/graphql` route.
+ * `rows` is NAMED (`Array<Record<string, unknown>>`) -- each row is
+ * a column-keyed object, so you read `row[columnName]` directly.
+ * This is IDENTICAL to the GraphQL `executeSQL` row shape, so the
+ * bolt-side wrapper is a true drop-in replacement for the
+ * `ctx.fetch->/graphql` route (a bolt migrating from one to the
+ * other reads `row.<column>` unchanged). `columns[]` is still
+ * provided for ordered iteration / header rendering.
  */
 export interface SqlResult {
   /** Column names in declaration order. */
   columns: string[];
-  /** Rows in positional shape: `rows[i][j]` is column j of row i. */
-  rows: unknown[][];
+  /** Rows as column-keyed objects: `rows[i][columnName]` is the value. */
+  rows: Array<Record<string, unknown>>;
   /** Substrate-reported row count (may exceed `rows.length` when truncated). */
   rowCount: number;
   /** Query execution wall time, milliseconds. */

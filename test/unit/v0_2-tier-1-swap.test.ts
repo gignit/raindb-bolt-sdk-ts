@@ -215,7 +215,7 @@ test('objects.delete throws BindingNotInstalled when ctx.objects absent', async 
 // ctx.sql.query (audit §H Gap 3; substrate commit af5e9eb)
 // ============================================================
 
-test('sql.query forwards (sql, opts) positionally and returns positional rows', async () => {
+test('sql.query forwards (sql, opts) and returns named (column-keyed) rows', async () => {
   let capturedSql = '';
   let capturedOpts: { formationId?: string; timeoutMs?: number; withFreshness?: boolean } | undefined;
   setCtx(
@@ -227,11 +227,14 @@ test('sql.query forwards (sql, opts) positionally and returns positional rows', 
         ) => {
           capturedSql = q;
           capturedOpts = opts;
+          // The substrate returns column-keyed object rows, IDENTICAL to
+          // the GraphQL executeSQL shape (sqlResultToGQL / the bolt
+          // adapter both zip duckdb positional rows into map[column]value).
           return {
             columns: ['n', 'name'],
             rows: [
-              [1, 'alice'],
-              [2, 'bob'],
+              { n: 1, name: 'alice' },
+              { n: 2, name: 'bob' },
             ],
             rowCount: 2,
             durationMs: 7,
@@ -259,12 +262,10 @@ test('sql.query forwards (sql, opts) positionally and returns positional rows', 
   assert.deepEqual(result.columns, ['n', 'name']);
   assert.equal(result.rowCount, 2);
   assert.equal(result.rows.length, 2);
-  // Positional row access -- this is the v0.2.0 shape contract.
-  const nIdx = result.columns.indexOf('n');
-  const nameIdx = result.columns.indexOf('name');
-  assert.equal(result.rows[0]?.[nIdx], 1);
-  assert.equal(result.rows[0]?.[nameIdx], 'alice');
-  assert.equal(result.rows[1]?.[nameIdx], 'bob');
+  // Named row access -- the parity shape contract (matches executeSQL).
+  assert.equal(result.rows[0]?.['n'], 1);
+  assert.equal(result.rows[0]?.['name'], 'alice');
+  assert.equal(result.rows[1]?.['name'], 'bob');
   assert.equal(result.latest, undefined); // Tier 1 always nil
 });
 
