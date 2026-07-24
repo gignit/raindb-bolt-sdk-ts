@@ -169,15 +169,15 @@ test('sql.query dispatches through when ctx.sql.query is present', async () => {
   setCtx(
     mockCtx({
       // The cast is fine -- the BoltContext type has sql?: SqlBinding,
-      // and we're providing one for this test. Note: rows are positional
-      // (unknown[][]) per the substrate's SQLResult shape (changed in
-      // v0.2.0 to match runtime/engine.go::SQLResult).
+      // and we're providing one for this test. Note: rows are named
+      // (column-keyed objects) per the substrate's SQLResult shape
+      // (commit 4e1b5ef: SqlResult.rows matches executeSQL named rows).
       sql: {
         query: async () => {
           dispatched = true;
           return {
             columns: ['n'],
-            rows: [[1]],
+            rows: [{ n: 1 }],
             rowCount: 1,
             durationMs: 1,
             truncated: false,
@@ -191,7 +191,7 @@ test('sql.query dispatches through when ctx.sql.query is present', async () => {
   assert.equal(dispatched, true);
   assert.equal(out.rowCount, 1);
   assert.equal(out.columns[0], 'n');
-  assert.equal(out.rows[0]?.[0], 1);
+  assert.equal(out.rows[0]?.n, 1);
 });
 
 test('a stubbed binding routes typed errors through translateBindingError', async () => {

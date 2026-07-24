@@ -278,7 +278,7 @@ test('sql.query honors withFreshness option and tolerates absent latest field', 
           capturedOpts = opts;
           return {
             columns: ['x'],
-            rows: [[1]],
+            rows: [{ x: 1 }],
             rowCount: 1,
             durationMs: 1,
             truncated: false,

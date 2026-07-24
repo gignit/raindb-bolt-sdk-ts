@@ -243,6 +243,105 @@ export interface UntagInput {
 }
 
 // =====================================================================
+// JSON-op wire shapes for ctx.db.mutate / mutateAndRead.
+//
+// These mirror the substrate's canonical codec exactly (the kinds
+// storage.DecodeJSONOps decodes in pkg/storage/json_ops.go). The
+// wrapper does NOT re-implement the codec -- it passes these objects
+// through as-is; the host decodes + validates them. Discriminated on
+// the `kind` field.
+// =====================================================================
+
+/**
+ * Increment (or decrement, with a negative `by`) the int64-coerced
+ * value at `path`. Missing intermediate keys are created on demand.
+ * Spend a credit with `by: -1`; refund with `by: 1`.
+ */
+export interface JsonOpIncrement {
+  kind: 'increment';
+  path: string;
+  by: number;
+}
+
+/** Replace the value at `path` with `value` (non-additive fields). */
+export interface JsonOpSet {
+  kind: 'set';
+  path: string;
+  value: unknown;
+}
+
+/**
+ * Fold the int64 value at `from` into the int64 value at `to`, then
+ * zero `from` when `reset` is true. Single-call drain primitive.
+ */
+export interface JsonOpMove {
+  kind: 'move';
+  from: string;
+  to: string;
+  reset?: boolean;
+}
+
+/**
+ * Atomic fixed-window INCR+EXPIRE -- the passive-reset counter. If
+ * `now - <windowStartPath> >= windowMs` (window expired, or first
+ * ever use) the substrate resets `<countPath>` to `by` and stamps
+ * `<windowStartPath>` to `nowMs`; otherwise it adds `by` to
+ * `<countPath>`. This is what makes a monthly-resetting quota token
+ * work in a bolt with no cron: the reset rides the next mutate.
+ * Carry `nowMs` from the bolt (typically `Date.now()`); both paths
+ * are dot-walked and missing leaves coerce to 0.
+ */
+export interface JsonOpWindowIncrement {
+  kind: 'windowIncrement';
+  countPath: string;
+  windowStartPath: string;
+  windowMs: number;
+  by: number;
+  nowMs: number;
+}
+
+/**
+ * One JSON op for {@link db.mutate} / {@link db.mutateAndRead}.
+ * Discriminated union over the substrate's canonical op kinds.
+ */
+export type JsonOp =
+  | JsonOpIncrement
+  | JsonOpSet
+  | JsonOpMove
+  | JsonOpWindowIncrement;
+
+/** Named-args input for {@link db.mutate}. */
+export interface MutateInput {
+  formationId: string;
+  scopeValue: string;
+  ops: JsonOp[];
+}
+
+/** Named-args input for {@link db.mutateAndRead}. */
+export interface MutateAndReadInput {
+  formationId: string;
+  scopeValue: string;
+  ops: JsonOp[];
+  /**
+   * Unprefixed payload paths to read back after the mutate. Each maps
+   * to its post-mutation int64 value in the returned record. The
+   * substrate stamps the "payload." prefix internally.
+   */
+  readPaths: string[];
+}
+
+/**
+ * Named-args input for {@link db.writeToken}. Named `WriteTokenDbInput`
+ * to disambiguate from the `token` namespace's `WriteTokenInput`
+ * (ctx.token.write) -- ctx.db.writeToken writes a token DROPLET to a
+ * token formation, distinct from the token-namespace key/value API.
+ */
+export interface WriteTokenDbInput {
+  formationId: string;
+  payload: Record<string, unknown>;
+}
+
+// =====================================================================
 // DbBinding interface -- shape of `BoltContext.db` (the raw goja
 // installed surface). Methods are positional-args; method presence
 // for stubs is optional (the namespace exists; individual methods
@@ -342,6 +441,28 @@ export interface DbBinding {
     items: WriteBatchItem[],
     opts?: WriteBatchOpts,
   ) => Promise<WriteBatchResult>;
+
+  // --- LIVE (substrate installDBBinding: mutate/mutateAndRead/writeToken) ---
+  //
+  // Positional args per the goja installer. Typed optional for
+  // backwards-compat with lightning binaries that pre-date the
+  // mutate/writeToken bindings; the wrapper guards with
+  // BindingNotInstalled.
+  mutate?: (
+    formationId: string,
+    scopeValue: string,
+    ops: JsonOp[],
+  ) => Promise<void>;
+  mutateAndRead?: (
+    formationId: string,
+    scopeValue: string,
+    ops: JsonOp[],
+    readPaths: string[],
+  ) => Promise<Record<string, number>>;
+  writeToken?: (
+    formationId: string,
+    payload: Record<string, unknown>,
+  ) => Promise<DropletEnvelope>;
 
   // --- STUBS (optional methods; substrate may not have shipped them) ---
   readAt?: (input: ReadAtInput) => Promise<Droplet | null>;
@@ -942,6 +1063,174 @@ export const db = {
     } catch (err) {
       translateBindingError(err, {
         binding: BINDING.db_expirationDays,
+      });
+    }
+  },
+
+  /**
+   * Atomic read-modify-write on a cache-backed token entity. Applies
+   * the `ops` under the owning host's entry mutex -- the single
+   * authoritative serialization point -- so concurrent bolts never
+   * lose an increment. The owning formation must declare
+   * `lifecycle.autoCache: true`; the substrate enforces that and
+   * prefixes op paths with `payload.`.
+   *
+   * LIVE. Backed by sdk.Client.Mutate.
+   *
+   * @requires capability: `mutate` on the formation (distinct from
+   *   `write` -- a bolt that may bump a counter need not hold full
+   *   droplet-write access). Authority stays tenant-scoped: a bolt
+   *   mutating a platform-owned protected token is denied by the
+   *   substrate's write-authorization wall, exactly as a direct SDK
+   *   caller would be.
+   * @throws CapabilityDenied when `mutate` is not declared
+   * @throws BindingNotInstalled on a lightning binary that pre-dates
+   *   the mutate binding
+   *
+   * @example Spend one credit
+   * ```ts
+   * await db.mutate({
+   *   formationId: 'invite-quota',
+   *   scopeValue: tenantId,
+   *   ops: [{ kind: 'increment', path: 'used', by: 1 }],
+   * });
+   * ```
+   */
+  async mutate(input: MutateInput): Promise<void> {
+    const ctx = resolveCtx();
+    if (typeof ctx.db.mutate !== 'function') {
+      throw new BindingNotInstalled(
+        `${BINDING.db_mutate} requires ctx.db.mutate which is not ` +
+          `installed in this bolt runtime. Redeploy the bolt against a ` +
+          `lightning binary that ships the ctx.db.mutate binding ` +
+          `(substrate installDBBinding).`,
+        { binding: BINDING.db_mutate, input },
+      );
+    }
+    try {
+      await ctx.db.mutate(input.formationId, input.scopeValue, input.ops);
+    } catch (err) {
+      translateBindingError(err, {
+        binding: BINDING.db_mutate,
+        input,
+      });
+    }
+  },
+
+  /**
+   * Atomic read-modify-write PLUS read-back of the post-mutation
+   * int64 values at `readPaths`, in ONE atomic op. This is the
+   * subtract-a-counter-and-read-the-remaining-value primitive: pair
+   * a `windowIncrement` op with a read of the count path to bump a
+   * monthly quota and learn the new total in a single call, with the
+   * window passively resetting when it rolls over -- no cron. Mirrors
+   * the substrate's fleet rate-limiter (pkg/sdk/fleet_ratelimit.go).
+   *
+   * LIVE. Backed by sdk.Client.MutateAndRead.
+   *
+   * @requires capability: `mutate` on the formation
+   * @returns a record mapping each `readPath` to its post-mutation
+   *   int64 value
+   * @throws CapabilityDenied when `mutate` is not declared
+   * @throws BindingNotInstalled on a pre-mutate lightning binary
+   *
+   * @example Monthly-resetting invite quota: consume one, read remaining
+   * ```ts
+   * const MONTH_MS = 30 * 24 * 60 * 60 * 1000;
+   * const vals = await db.mutateAndRead({
+   *   formationId: 'invite-quota',
+   *   scopeValue: tenantId,
+   *   ops: [{
+   *     kind: 'windowIncrement',
+   *     countPath: 'used',
+   *     windowStartPath: 'windowStartMs',
+   *     windowMs: MONTH_MS,
+   *     by: 1,
+   *     nowMs: Date.now(),
+   *   }],
+   *   readPaths: ['used'],
+   * });
+   * const used = vals.used ?? 0;         // resets to 1 on a new month
+   * if (used > MONTHLY_LIMIT) return { status: 429, body: 'quota exceeded' };
+   * ```
+   */
+  async mutateAndRead(
+    input: MutateAndReadInput,
+  ): Promise<Record<string, number>> {
+    const ctx = resolveCtx();
+    if (typeof ctx.db.mutateAndRead !== 'function') {
+      throw new BindingNotInstalled(
+        `${BINDING.db_mutateAndRead} requires ctx.db.mutateAndRead which ` +
+          `is not installed in this bolt runtime. Redeploy the bolt ` +
+          `against a lightning binary that ships the ctx.db.mutateAndRead ` +
+          `binding (substrate installDBBinding).`,
+        { binding: BINDING.db_mutateAndRead, input },
+      );
+    }
+    try {
+      const out = await ctx.db.mutateAndRead(
+        input.formationId,
+        input.scopeValue,
+        input.ops,
+        input.readPaths,
+      );
+      return (out as Record<string, number>) ?? {};
+    } catch (err) {
+      translateBindingError(err, {
+        binding: BINDING.db_mutateAndRead,
+        input,
+      });
+    }
+  },
+
+  /**
+   * Write a token droplet to a token formation. Unlike
+   * {@link db.writeDroplet} (which routes entity formations), this
+   * targets a formation whose type is a token: the substrate stamps
+   * the author (`bolt:<boltId>`), resolves the scopeValue from the
+   * payload's scopeKey, and applies token-lifecycle expiration.
+   *
+   * LIVE. Backed by sdk.Client.WriteToken.
+   *
+   * @requires capability: `token-write` on the formation
+   * @returns the written token's envelope (carries dropletId)
+   * @throws CapabilityDenied when `token-write` is not declared
+   * @throws ConditionFailed / TokenExists when the token formation
+   *   declares CAS / create-only controls the write doesn't satisfy
+   * @throws BindingNotInstalled on a pre-writeToken lightning binary
+   *
+   * @example
+   * ```ts
+   * const { dropletId } = await db.writeToken({
+   *   formationId: 'invite-quota',
+   *   payload: { tenantId, used: 0, windowStartMs: Date.now() },
+   * });
+   * ```
+   */
+  async writeToken(input: WriteTokenDbInput): Promise<DropletEnvelope> {
+    const ctx = resolveCtx();
+    if (typeof ctx.db.writeToken !== 'function') {
+      throw new BindingNotInstalled(
+        `${BINDING.db_writeToken} requires ctx.db.writeToken which is not ` +
+          `installed in this bolt runtime. Redeploy the bolt against a ` +
+          `lightning binary that ships the ctx.db.writeToken binding ` +
+          `(substrate installDBBinding).`,
+        { binding: BINDING.db_writeToken, input },
+      );
+    }
+    try {
+      const out = await ctx.db.writeToken(input.formationId, input.payload);
+      const id = (out as { dropletId?: unknown }).dropletId;
+      if (typeof id !== 'string') {
+        throw new Error(
+          'ctx.db.writeToken: substrate did not return dropletId string',
+        );
+      }
+      return { dropletId: id };
+    } catch (err) {
+      translateBindingError(err, {
+        binding: BINDING.db_writeToken,
+        input,
       });
     }
   },

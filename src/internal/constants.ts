@@ -97,6 +97,21 @@ export const BINDING = {
   db_resolveFormation: 'ctx.db.resolveFormation',
   db_expire: 'ctx.db.expire',
   db_expirationDays: 'ctx.db.expirationDays',
+
+  // === ctx.db.mutate / mutateAndRead / writeToken -- LIVE ===
+  //
+  // Atomic token read-modify-write (mutate / mutateAndRead) + token
+  // write (writeToken). The substrate installs these on ctx.db in
+  // pkg/lightning/engines/goja/bindings.go::installDBBinding and
+  // enforces the per-formation capability gate host-side: OpMutate
+  // ("mutate") for mutate/mutateAndRead, OpTokenWrite ("token-write")
+  // for writeToken. mutateAndRead is the subtract-a-counter-and-read-
+  // the-remaining-value primitive (backed by Client.MutateAndRead +
+  // storage.JSONOpWindowIncrement -- the same passive-window-reset
+  // mechanism pkg/sdk/fleet_ratelimit.go uses, no cron required).
+  db_mutate: 'ctx.db.mutate',
+  db_mutateAndRead: 'ctx.db.mutateAndRead',
+  db_writeToken: 'ctx.db.writeToken',
   /**
    * LIVE since v0.3.0. The substrate installed tag/untag on
    * `ctx.db` (not a separate `ctx.tags` namespace); the canonical

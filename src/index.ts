@@ -16,7 +16,7 @@
 // =====================================================================
 // Version constant -- mirrors package.json. Update both together.
 // =====================================================================
-export const VERSION = '0.4.0';
+export const VERSION = '0.5.0';
 
 // =====================================================================
 // Runtime helpers (the ambient ctx resolver)
@@ -88,6 +88,14 @@ export type {
   ExpireInput,
   TagInput,
   UntagInput,
+  JsonOp,
+  JsonOpIncrement,
+  JsonOpSet,
+  JsonOpMove,
+  JsonOpWindowIncrement,
+  MutateInput,
+  MutateAndReadInput,
+  WriteTokenDbInput,
 } from './bindings/db.js';
 
 export type { LogBinding } from './bindings/log.js';

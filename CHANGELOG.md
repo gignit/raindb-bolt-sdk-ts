@@ -8,6 +8,91 @@ Per the handoff doc §N, during the v0.x parallel-build phase: stubs may
 be swapped to live at any minor version bump; type changes to LIVE
 wrappers are breaking and trigger a minor version bump.
 
+## [0.5.0] - 2026-07-24
+
+Add three atomic token read-modify-write bindings to `ctx.db`. New
+LIVE wrappers (the substrate ships all three in `installDBBinding`);
+the droplet read/write/list methods are untouched.
+
+Substrate-side reference: the bindings land in
+`pkg/lightning/engines/goja/bindings.go::installDBBinding` (goja) +
+`internal/lightning/podchannel/dispatch.go` (pod parity), backed by
+`sdk.Client.{Mutate,MutateAndRead,WriteToken}`. The new formation op
+`mutate` (`runtime.OpMutate`) is added to `AllowedFormationOps` and to
+the raindb-base manifest-capability schema enum in lockstep (guarded by
+`internal/lightning/manifest_schema_drift_test.go`).
+
+### Added
+
+- **`db.mutate(formationId, scopeValue, ops)`** -- atomic
+  read-modify-write on a cache-backed token entity. `ops` is a
+  discriminated union over the substrate's canonical JSON-op codec
+  (`increment` / `set` / `move` / `windowIncrement`); the wrapper
+  passes them through as-is (the host decodes via
+  `storage.DecodeJSONOps`, no client-side re-implementation).
+  Capability op: `mutate` on the formation.
+- **`db.mutateAndRead(formationId, scopeValue, ops, readPaths)`** --
+  the same atomic mutate plus a read-back of the post-mutation int64
+  values at `readPaths`, in ONE op. This is the subtract-a-counter-
+  and-read-the-remaining-value primitive: pair a `windowIncrement` op
+  with a read of the count path to bump a monthly quota and learn the
+  new total in one call, with the window passively resetting on
+  rollover (no cron). Mirrors the substrate's fleet rate-limiter
+  (`pkg/sdk/fleet_ratelimit.go`). Capability op: `mutate`.
+- **`db.writeToken(formationId, payload)`** -- write a token droplet
+  to a token formation (distinct from `writeDroplet`, which routes
+  entity formations). The substrate stamps the author (`bolt:<boltId>`)
+  and resolves the scopeValue from the payload's scopeKey. Capability
+  op: `token-write` (the reserved `runtime.OpTokenWrite` that had no
+  binding until now).
+- **JSON-op types**: `JsonOp` (discriminated union) +
+  `JsonOpIncrement`, `JsonOpSet`, `JsonOpMove`, `JsonOpWindowIncrement`.
+  Plus `MutateInput`, `MutateAndReadInput`, `WriteTokenDbInput`
+  (named `WriteTokenDbInput` to disambiguate from the `token`
+  namespace's `WriteTokenInput`).
+- **`BINDING.db_mutate` / `db_mutateAndRead` / `db_writeToken`**
+  constants in `src/internal/constants.ts`.
+- **`DbBinding.mutate` / `mutateAndRead` / `writeToken`** raw
+  positional-args methods (typed optional for backwards-compat with
+  lightning binaries that pre-date the bindings; the wrapper guards
+  with `BindingNotInstalled`).
+- **10 new unit tests** in `test/unit/db-mutate.test.ts` (happy-path
+  incl. a `windowIncrement` round-trip, capability-denial, and
+  binding-missing for each of the three bindings). Total 117 unit
+  tests (all green).
+
+### Fixed
+
+- Two stale `sql.query` test mocks (`test/unit/binding-not-installed.test.ts`,
+  `test/unit/v0_2-tier-1-swap.test.ts`) returned positional `rows`
+  (`[[1]]`) after commit `4e1b5ef` changed `SqlResult.rows` to named
+  (column-keyed) objects. Updated the mocks + the one dependent
+  assertion to the named-row shape. Pre-existing breakage, unrelated
+  to the mutate bindings; fixed here to keep the suite green.
+
+### Authority note
+
+`db.mutate` / `mutateAndRead` delegate to the PLAIN
+`Client.Mutate` / `MutateAndRead` (tenant-scoped authority), NOT an
+admin-flip variant -- the same path the fleet rate-limiter uses for
+its own tenant meter. A bolt mutating a platform-owned protected token
+(admin != the bolt's tenant) is correctly denied by the substrate's
+`authorizeWrite` wall; the binding does not silently escalate. A
+formation whose quota token is tenant-owned works directly.
+
+## [0.4.0] - 2026-06-XX
+
+Add `ctx.auth` -- the per-request AuthContext the lightning
+dispatcher resolves by running the SAME GrantValidator raindb-api's
+auth middleware runs. Substrate reference: the unified-IAM-gate work
+(`ctx.auth` installer in `installAuthBinding`). Scalar accessors
+(`tenantId`, `subject`, `apiClientId`, `isAnonymous`) plus the
+`permits` / `permitsWireKeySubscribe` predicates.
+
+(This entry backfills the 0.4.0 release, which bumped the package
+version + added the `auth` binding but was not recorded in the
+changelog at the time.)
+
 ## [0.3.0] - 2026-05-31
 
 Wave 3A release: swap the four Tier 2 + Wave 2.5 stubs to LIVE
