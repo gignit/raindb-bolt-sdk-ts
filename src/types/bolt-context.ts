@@ -49,7 +49,7 @@ import type { ScheduleBinding } from '../bindings/schedule.js';
  * on `ctx.bolt`; they're typed optional here. When the substrate
  * ships them they become required in a minor version bump.
  *
- * @see ~/src/raindb-phoenix-lightning/pkg/lightning/runtime/engine.go
+ * @see ~/src/raindb-prime/pkg/lightning/runtime/engine.go
  *   `BoltMeta` for the live shape. The four optional fields below are
  *   STUBBED pending substrate work.
  */
@@ -117,7 +117,7 @@ export interface BoltContext {
    * (empty strings, false) when missing.
    *
    * See bindings/auth.ts for the surface contract +
-   * ~/src/raindb-phoenix-lightning/docs/work/bolt-iam-unified-gate.md
+   * ~/src/raindb-prime/internal/lightning (unified IAM gate; resolveAuthContext)
    * for the architecture.
    */
   readonly auth?: AuthBinding;

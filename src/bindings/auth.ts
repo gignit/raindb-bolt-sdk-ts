@@ -16,7 +16,7 @@
 // library discipline: ONE Permits implementation; rule changes
 // happen in pkg/auth only.
 //
-// See ~/src/raindb-phoenix-lightning/docs/work/bolt-iam-unified-gate.md
+// See ~/src/raindb-prime/internal/lightning (unified IAM gate; resolveAuthContext)
 // for the architecture decision + Phase plan.
 
 import { resolveCtx } from '../runtime/ctx-resolver.js';

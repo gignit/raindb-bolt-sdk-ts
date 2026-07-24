@@ -678,7 +678,7 @@ export const db = {
           `installed in this bolt runtime. The @raindb/bolt-sdk wrapper ` +
           `is LIVE since v0.2.0; the substrate-side binding landed in ` +
           `phoenix commit af5e9eb. See ` +
-          `~/src/raindb-phoenix-lightning/docs/AUDIT_BOLT_SDK_GAPS.md §G ` +
+          `raindb-prime pkg/lightning/engines/goja/bindings.go ` +
           `for the gap card that owns this surface.`,
         { binding: BINDING.db_listKeys, input },
       );
@@ -738,7 +738,7 @@ export const db = {
           `installed in this bolt runtime. The @raindb/bolt-sdk wrapper ` +
           `is LIVE since v0.2.0; the substrate-side binding landed in ` +
           `phoenix commit af5e9eb. See ` +
-          `~/src/raindb-phoenix-lightning/docs/AUDIT_BOLT_SDK_GAPS.md §G ` +
+          `raindb-prime pkg/lightning/engines/goja/bindings.go ` +
           `for the gap card that owns this surface.`,
         { binding: BINDING.db_listSince, input },
       );
@@ -790,7 +790,7 @@ export const db = {
           `installed in this bolt runtime. The @raindb/bolt-sdk wrapper ` +
           `is LIVE since v0.3.0; the substrate-side binding landed in ` +
           `phoenix commit eee3eac. See ` +
-          `~/src/raindb-phoenix-lightning/docs/AUDIT_BOLT_SDK_GAPS.md §L ` +
+          `raindb-prime pkg/lightning/engines/goja/bindings.go ` +
           `for the gap card that owns this surface.`,
         { binding: BINDING.db_tag, input },
       );
@@ -832,7 +832,7 @@ export const db = {
           `installed in this bolt runtime. The @raindb/bolt-sdk wrapper ` +
           `is LIVE since v0.3.0; the substrate-side binding landed in ` +
           `phoenix commit eee3eac. See ` +
-          `~/src/raindb-phoenix-lightning/docs/AUDIT_BOLT_SDK_GAPS.md §L ` +
+          `raindb-prime pkg/lightning/engines/goja/bindings.go ` +
           `for the gap card that owns this surface.`,
         { binding: BINDING.db_untag, input },
       );
@@ -894,7 +894,7 @@ export const db = {
           `installed in this bolt runtime. The @raindb/bolt-sdk wrapper ` +
           `is LIVE since v0.3.0; the substrate-side binding landed in ` +
           `phoenix commit eee3eac. See ` +
-          `~/src/raindb-phoenix-lightning/docs/AUDIT_BOLT_SDK_GAPS.md §I ` +
+          `raindb-prime pkg/lightning/engines/goja/bindings.go ` +
           `for the gap card that owns this surface.`,
         { binding: BINDING.db_writeBatch, input },
       );
@@ -1003,7 +1003,7 @@ export const db = {
           `installed in this bolt runtime. The @raindb/bolt-sdk wrapper ` +
           `is LIVE since v0.3.0; the substrate-side binding landed in ` +
           `phoenix commit eee3eac. See ` +
-          `~/src/raindb-phoenix-lightning/docs/AUDIT_BOLT_SDK_GAPS.md §M ` +
+          `raindb-prime pkg/lightning/engines/goja/bindings.go ` +
           `for the gap card that owns this surface.`,
         { binding: BINDING.db_expire, input },
       );
@@ -1048,7 +1048,7 @@ export const db = {
           `which is not installed in this bolt runtime. The ` +
           `@raindb/bolt-sdk wrapper is LIVE since v0.3.0; the ` +
           `substrate-side binding landed in phoenix commit eee3eac. See ` +
-          `~/src/raindb-phoenix-lightning/docs/AUDIT_BOLT_SDK_GAPS.md §M ` +
+          `raindb-prime pkg/lightning/engines/goja/bindings.go ` +
           `for the gap card that owns this surface.`,
         { binding: BINDING.db_expirationDays },
       );
@@ -1101,9 +1101,11 @@ export const db = {
     if (typeof ctx.db.mutate !== 'function') {
       throw new BindingNotInstalled(
         `${BINDING.db_mutate} requires ctx.db.mutate which is not ` +
-          `installed in this bolt runtime. Redeploy the bolt against a ` +
-          `lightning binary that ships the ctx.db.mutate binding ` +
-          `(substrate installDBBinding).`,
+          `installed in this bolt runtime. The @raindb/bolt-sdk wrapper ` +
+          `is LIVE since v0.5.0; the substrate-side binding is installed ` +
+          `by raindb-prime pkg/lightning/engines/goja/bindings.go ` +
+          `(and internal/lightning/podchannel for the pod engine). ` +
+          `Redeploy the bolt against a lightning runtime that ships it.`,
         { binding: BINDING.db_mutate, input },
       );
     }
@@ -1161,9 +1163,11 @@ export const db = {
     if (typeof ctx.db.mutateAndRead !== 'function') {
       throw new BindingNotInstalled(
         `${BINDING.db_mutateAndRead} requires ctx.db.mutateAndRead which ` +
-          `is not installed in this bolt runtime. Redeploy the bolt ` +
-          `against a lightning binary that ships the ctx.db.mutateAndRead ` +
-          `binding (substrate installDBBinding).`,
+          `is not installed in this bolt runtime. The @raindb/bolt-sdk ` +
+          `wrapper is LIVE since v0.5.0; the substrate-side binding is ` +
+          `installed by raindb-prime pkg/lightning/engines/goja/bindings.go ` +
+          `(and internal/lightning/podchannel for the pod engine). ` +
+          `Redeploy the bolt against a lightning runtime that ships it.`,
         { binding: BINDING.db_mutateAndRead, input },
       );
     }
@@ -1212,9 +1216,11 @@ export const db = {
     if (typeof ctx.db.writeToken !== 'function') {
       throw new BindingNotInstalled(
         `${BINDING.db_writeToken} requires ctx.db.writeToken which is not ` +
-          `installed in this bolt runtime. Redeploy the bolt against a ` +
-          `lightning binary that ships the ctx.db.writeToken binding ` +
-          `(substrate installDBBinding).`,
+          `installed in this bolt runtime. The @raindb/bolt-sdk wrapper ` +
+          `is LIVE since v0.5.0; the substrate-side binding is installed ` +
+          `by raindb-prime pkg/lightning/engines/goja/bindings.go ` +
+          `(and internal/lightning/podchannel for the pod engine). ` +
+          `Redeploy the bolt against a lightning runtime that ships it.`,
         { binding: BINDING.db_writeToken, input },
       );
     }

@@ -34,6 +34,7 @@
 
 import type { BoltContext } from '../types/bolt-context.js';
 import { db } from '../bindings/db.js';
+import { sql } from '../bindings/sql.js';
 import { setCtx } from '../runtime/ctx-resolver.js';
 
 // ---------------------------------------------------------------------
@@ -250,11 +251,19 @@ function extractOperationName(query: string): string | null {
  * we don't have a native handler for this operation (so the caller
  * falls through to ctx.fetch).
  *
- * v0.1 routes only the LIVE substrate operations whose bindings are
- * wired in @raindb/bolt-sdk:
+ * Routes every substrate operation the @raindb/agent tool catalog
+ * emits AND for which @raindb/bolt-sdk has a LIVE native binding, so
+ * the agent takes the fast in-process path (~1000x less Go resource,
+ * ~400x faster) instead of an HTTP self-loop back through /graphql:
  *   - readLatest / readDroplet / writeDroplet / listDroplets
+ *   - listKeys / executeSQL / tagEntity / untagEntity / expireDroplet
  *
- * As STUBBED bindings ship LIVE, this routing table grows.
+ * Operations whose bindings are still STUB (catalog*, pushPublic,
+ * vectorSearch, readCurrent, readRelay, describeFormation, ...) are
+ * intentionally NOT routed here -- they fall through to ctx.fetch
+ * until the native binding ships. Grow this table in lockstep with
+ * the STUB->LIVE swaps (keep it to ops the agent actually emits; a
+ * case for an op the agent never sends is dead code).
  */
 async function tryRouteToNative(
   opName: string,
@@ -317,6 +326,71 @@ async function tryRouteToNative(
             hasMore: out.length === (pageSize ?? 50),
           },
         },
+      };
+    }
+
+    // --- LIVE bindings added to the routing table (previously the agent
+    //     self-looped these through GraphQL even though a fast native
+    //     binding exists). The op names are the raindb-api GraphQL verbs
+    //     lowered by extractOperationName; the projected data envelope
+    //     mirrors the resolver's field selection the agent tool reads. ---
+
+    case 'listKeys': {
+      const formationId = String(input['formationId'] ?? '');
+      const indexId = String(input['indexId'] ?? input['indexName'] ?? '');
+      if (!formationId || !indexId) return undefined;
+      // The agent's ListKeysInput carries cursor-pagination fields
+      // (first/after/orderByDesc/...). Forward the ones the native
+      // binding's CursorPaginationOpts accepts; the wrapper defaults
+      // the rest.
+      const opts: Record<string, unknown> = {};
+      for (const k of ['first', 'after', 'orderByDesc', 'prefix']) {
+        if (input[k] !== undefined) opts[k] = input[k];
+      }
+      const page = await db.listKeys({
+        formationId,
+        indexId,
+        opts: opts as never,
+      });
+      return { data: { listKeys: page } };
+    }
+
+    case 'executeSQL': {
+      const sqlText = String(input['sql'] ?? input['query'] ?? '');
+      if (!sqlText) return undefined;
+      const withFreshness = input['withFreshness'] === true;
+      const out = await sql.query({ sql: sqlText, withFreshness });
+      return { data: { executeSQL: out } };
+    }
+
+    case 'tagEntity': {
+      const formationId = String(input['formationId'] ?? '');
+      const scopeValue = String(input['scopeValue'] ?? '');
+      const tags = (input['tags'] as Record<string, string> | undefined) ?? {};
+      if (!formationId || !scopeValue) return undefined;
+      await db.tag({ formationId, scopeValue, tags });
+      // Native binding returns void; the agent tool only reads `success`.
+      return { data: { tagEntity: { formationId, scopeValue, success: true } } };
+    }
+
+    case 'untagEntity': {
+      const formationId = String(input['formationId'] ?? '');
+      const scopeValue = String(input['scopeValue'] ?? '');
+      const tagKeys = (input['tagKeys'] as string[] | undefined) ?? [];
+      if (!formationId || !scopeValue) return undefined;
+      await db.untag({ formationId, scopeValue, tagKeys });
+      return {
+        data: { untagEntity: { formationId, scopeValue, success: true } },
+      };
+    }
+
+    case 'expireDroplet': {
+      const formationId = String(input['formationId'] ?? '');
+      const scopeValue = String(input['scopeValue'] ?? '');
+      if (!formationId || !scopeValue) return undefined;
+      await db.expire({ formationId, scopeValue });
+      return {
+        data: { expireDroplet: { formationId, scopeValue, success: true } },
       };
     }
 

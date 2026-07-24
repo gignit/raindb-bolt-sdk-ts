@@ -42,7 +42,9 @@ test('sql.query throws BindingNotInstalled when ctx.sql is missing', async () =>
         (e as Error).message,
         /ctx\.sql\.query.*ctx\.sql which is not installed/,
       );
-      assert.match((e as Error).message, /AUDIT_BOLT_SDK_GAPS\.md/);
+      // The message points at the substrate binding installers
+      // (raindb-prime), not the retired raindb-phoenix-lightning docs.
+      assert.match((e as Error).message, /raindb-prime|bindings\.go/);
       return true;
     },
   );

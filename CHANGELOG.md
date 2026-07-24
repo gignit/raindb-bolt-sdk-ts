@@ -8,6 +8,49 @@ Per the handoff doc §N, during the v0.x parallel-build phase: stubs may
 be swapped to live at any minor version bump; type changes to LIVE
 wrappers are breaking and trigger a minor version bump.
 
+## [0.6.0] - 2026-07-24
+
+Consistency pass: resolve the drift that accumulated as the SDK was
+extended binding-by-binding without a refactor. No new bindings; the
+LIVE surface is unchanged. Three fixes make the package internally
+consistent and the agent-bridge complete.
+
+### Fixed
+
+- **agent-bridge routing table completed.** `agent-bridge/host.ts`'s
+  `tryRouteToNative` only routed the four v0.1 operations
+  (`readLatest`/`readDroplet`/`writeDroplet`/`listDroplets`). Every
+  binding that went LIVE since (`listKeys`, `executeSQL`, `tagEntity`,
+  `untagEntity`, `expireDroplet`) was absent, so an `@raindb/agent`-driven
+  bolt still made an HTTP self-loop back through `/graphql` for those
+  operations instead of taking the in-process native binding (~1000x
+  less Go resource, ~400x faster). The table now routes every substrate
+  operation the agent tool catalog emits AND for which a LIVE native
+  binding exists. Operations whose bindings are still STUB (catalog*,
+  pushPublic, vectorSearch, readCurrent, readRelay, describeFormation)
+  intentionally fall through to `ctx.fetch` until the native binding
+  ships. 5 new agent-bridge tests pin the routing (native path taken,
+  `ctx.fetch` NOT called, correct data envelope projected).
+- **Dead-repo doc references removed.** 18 references to the retired
+  `~/src/raindb-phoenix-lightning` tree (in `BindingNotInstalled`
+  messages, `stubOrDispatch`, and JSDoc `@see`s across constants.ts,
+  binding-not-installed.ts, db.ts, sql.ts, objects.ts, auth.ts,
+  bolt-context.ts, index.ts) now point at the live substrate
+  (`raindb-prime pkg/lightning/...`), which is the source of truth for
+  which bindings are LIVE. The `binding-not-installed` test asserting
+  the old doc path is updated accordingly.
+- **`mutate`/`mutateAndRead`/`writeToken` error messages** aligned to
+  the same LIVE-method shape the sibling `db` methods use (reference the
+  substrate installer, not a one-off "installDBBinding" string).
+
+### Docs
+
+- README LIVE/STUB tables refreshed to reality: `db` now lists all
+  fourteen LIVE methods; `objects`/`sql`/`schedule` moved to LIVE;
+  the STUB table trimmed to the genuinely-pending bindings; a note
+  documents `db.mutate`/`mutateAndRead`/`writeToken` + the
+  windowIncrement passive-reset quota pattern.
+
 ## [0.5.0] - 2026-07-24
 
 Add three atomic token read-modify-write bindings to `ctx.db`. New

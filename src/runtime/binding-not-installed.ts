@@ -68,11 +68,11 @@ export async function stubOrDispatch<T>(
     throw new BindingNotInstalled(
       `${bindingName} is not installed in this bolt runtime. ` +
         `The @raindb/bolt-sdk wrapper is shipped; the substrate-side ` +
-        `binding is pending. See ` +
-        `~/src/raindb-phoenix-lightning/docs/AUDIT_BOLT_SDK_GAPS.md ` +
-        `for the gap card that owns this surface, and ` +
-        `~/src/raindb-phoenix-lightning/docs/BOLT_SDK_COORDINATION.md ` +
-        `for current substrate ship status.`,
+        `binding is pending. The native binding installers live in ` +
+        `raindb-prime pkg/lightning/engines/goja/bindings.go; a binding ` +
+        `absent there (and in internal/lightning/podchannel for the pod ` +
+        `engine) surfaces here. Redeploy the bolt against a lightning ` +
+        `runtime that ships this binding.`,
       { binding: bindingName, input },
     );
   }

@@ -2,12 +2,11 @@
  * @raindb/bolt-sdk -- typed bindings over the goja sandbox for
  * Lightning Bolt handler authors. Zero runtime overhead.
  *
- * @see ~/src/raindb-phoenix-lightning/docs/HANDOFF_RAINDB_BOLT_SDK_TS.md
- *   for the constitutional spec.
- * @see ~/src/raindb-phoenix-lightning/docs/AUDIT_BOLT_SDK_GAPS.md
- *   for the substrate-side gap roadmap.
- * @see ~/src/raindb-phoenix-lightning/docs/BOLT_SDK_COORDINATION.md
- *   for the live binding ship-status ledger.
+ * @see ~/src/raindb-prime/pkg/lightning -- the substrate bolt runtime:
+ *   binding installers (pkg/lightning/engines/goja/bindings.go), the
+ *   runtime SDK interface (pkg/lightning/runtime/engine.go), and the
+ *   pod-engine dispatch (internal/lightning/podchannel). The code is
+ *   the source of truth for which bindings are LIVE.
  *
  * This file is the public API. Internals under `src/internal/` are
  * not exported.
@@ -16,7 +15,7 @@
 // =====================================================================
 // Version constant -- mirrors package.json. Update both together.
 // =====================================================================
-export const VERSION = '0.5.0';
+export const VERSION = '0.6.0';
 
 // =====================================================================
 // Runtime helpers (the ambient ctx resolver)

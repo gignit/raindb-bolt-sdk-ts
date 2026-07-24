@@ -256,7 +256,10 @@ binding below is either LIVE (substrate ships it today) or STUB
 | Namespace      | Methods                                                                                      |
 |----------------|----------------------------------------------------------------------------------------------|
 | `log`          | `info`, `warn`, `error`                                                                      |
-| `db`           | `readLatest`, `readDroplet`, `writeDroplet`, `listDroplets`                                  |
+| `db`           | `readLatest`, `readDroplet`, `writeDroplet`, `listDroplets`, `listKeys`, `listSince`, `writeBatch`, `tag`, `untag`, `expire`, `expirationDays`, `mutate`, `mutateAndRead`, `writeToken` |
+| `objects`      | `get`, `put`, `exists`, `delete` -- PRIVATE-tier + tenant-prefix-locked (gated by `capabilities.raindb.objects`) |
+| `sql`          | `query` -- native local DuckDB executor; returns column-keyed rows (identical shape to the `executeSQL` GraphQL surface) |
+| `schedule`     | `Schedule(formationId, actionRef, runAfterMs, payload)` -- enqueue a deferred bolt callback |
 | `fetch`        | `(method, url, headers, body) -> {status, headers, body}` -- HTTPS-only, capability-gated  |
 | `secrets`      | `get(name)`                                                                                  |
 | `ids`          | `uuidv7()`                                                                                   |
@@ -266,17 +269,22 @@ binding below is either LIVE (substrate ships it today) or STUB
 | `iam`          | `mintWireToken({ subject, resources, ttlSec })` -- mint per-user wire-key tokens for SSE   |
 | `auth`         | `tenantId`, `subject`, `apiClientId`, `isAnonymous`, `permits(...)`, `permitsWireKeySubscribe(...)` -- per-request grant inspection |
 | `response`     | `setHeader`, `beginStream`, `write` -- streaming routes only                                |
-| `schedule`     | `Schedule(formationId, actionRef, runAfterMs, payload)` -- enqueue a deferred bolt callback |
+
+**`db.mutate` / `db.mutateAndRead`** are atomic read-modify-write on a
+cache-backed token (formation must declare `lifecycle.autoCache: true`).
+`mutateAndRead` returns the post-mutation counter values in one op --
+the subtract-a-counter-and-read-remaining primitive. Pair a
+`windowIncrement` op for a monthly quota that passively resets with no
+cron. Capability op: `mutate`. **`db.writeToken`** writes a token
+droplet (capability op: `token-write`).
 
 ### STUB bindings (wrapper ships, substrate-side pending)
 
 | Namespace      | Methods                                                                                          |
 |----------------|--------------------------------------------------------------------------------------------------|
-| `db` (cont'd)  | `listKeys`, `listSince`, `writeBatch`, `readAt`, `readCurrent`, `resolveFormation`, `expire`     |
+| `db` (cont'd)  | `readAt`, `readCurrent`, `resolveFormation`                                                      |
 | `token`        | `write`, `claim`, `read`, `delete`, `deleteAll`                                                  |
 | `stats`        | `increment`, `set`, `batch`, `drain`                                                             |
-| `objects`      | `get`, `put`, `exists`, `delete`                                                                 |
-| `sql`          | `query`                                                                                          |
 | `relay`        | `write`, `read`, `updateStatus`, `spawnChild`, `writeLog`, `enqueueToken`, `dequeueToken`        |
 | `actions`      | `dispatch`, `invoke`                                                                             |
 | `vectors`      | `query`, `queryByText`, `deleteFormation`                                                        |
@@ -284,10 +292,14 @@ binding below is either LIVE (substrate ships it today) or STUB
 | `catalog`      | `insert`, `list`, `tree`                                                                         |
 | `formations`   | `describe`, `list`, `warm`                                                                       |
 | `flows`        | `queryState`                                                                                     |
+| `tags`         | `replaceTags` -- no native atomic replace; emulate via `db.untag` + `db.tag`                    |
 
 A STUB binding throws `BindingNotInstalled` at runtime until the
 substrate ships it. Your code compiles; deployment requires the
-native binding to be present.
+native binding to be present. The native binding installers live in
+`raindb-prime pkg/lightning/engines/goja/bindings.go` (goja) and
+`internal/lightning/podchannel` (pod); the code is the source of truth
+for which bindings are LIVE.
 
 ### Examples
 

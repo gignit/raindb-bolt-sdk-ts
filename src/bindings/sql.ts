@@ -157,7 +157,7 @@ function missingSql(input: unknown): never {
       `v0.2.0; the substrate-side binding landed in phoenix commit ` +
       `af5e9eb. If you see this on a current lightning binary, ` +
       `capabilities.raindb.sqlRead is likely not set to true. See ` +
-      `~/src/raindb-phoenix-lightning/docs/AUDIT_BOLT_SDK_GAPS.md §H ` +
+      `raindb-prime pkg/lightning/engines/goja/bindings.go ` +
       `for the gap card that owns this surface.`,
     { binding: BINDING.sql_query, input },
   );

@@ -184,6 +184,161 @@ test('agent-bridge fetch routes writeDroplet natively', async () => {
   assert.equal(body.data.writeDroplet.dropletId, 'd-new');
 });
 
+// dbBase: the four required DbBinding methods so a `db` override can
+// add just the method under test (BoltContext.db is non-partial).
+const dbBase = {
+  readLatest: async () => null,
+  readDroplet: async () => null,
+  writeDroplet: async () => ({ dropletId: 'x' }),
+  listDroplets: async () => [],
+};
+
+test('agent-bridge routes tagEntity natively (was self-looping via GraphQL)', async () => {
+  let nativeCalled: { f?: string; s?: string; t?: unknown } = {};
+  let ctxFetchCalled = false;
+  const ctx = mockCtx({
+    db: {
+      ...dbBase,
+      tag: async (f: string, s: string, tags: Record<string, string>) => {
+        nativeCalled = { f, s, t: tags };
+      },
+    },
+    fetch: async () => {
+      ctxFetchCalled = true;
+      return {
+        status: 500, ok: false, headers: {},
+        body: 'nope', text: () => 'nope', json: () => null,
+      };
+    },
+  });
+  setCtx(ctx);
+
+  const host = makeBoltNativeHost(ctx);
+  const resp = await host.fetch('http://localhost:8080/graphql', {
+    method: 'POST',
+    body: JSON.stringify({
+      query:
+        'mutation TagEntity($input: TagEntityInput!) { tagEntity(input: $input) { success } }',
+      variables: {
+        input: { formationId: 'note', scopeValue: 'n-1', tags: { pinned: 'true' } },
+      },
+    }),
+  });
+
+  assert.equal(ctxFetchCalled, false, 'ctx.fetch must NOT be called');
+  assert.deepEqual(nativeCalled, { f: 'note', s: 'n-1', t: { pinned: 'true' } });
+  const body = (await resp.json()) as {
+    data: { tagEntity: { success: boolean } };
+  };
+  assert.equal(body.data.tagEntity.success, true);
+});
+
+test('agent-bridge routes untagEntity natively', async () => {
+  let nativeCalled: { f?: string; s?: string; k?: unknown } = {};
+  const ctx = mockCtx({
+    db: {
+      ...dbBase,
+      untag: async (f: string, s: string, tagKeys: string[]) => {
+        nativeCalled = { f, s, k: tagKeys };
+      },
+    },
+  });
+  setCtx(ctx);
+
+  const host = makeBoltNativeHost(ctx);
+  const resp = await host.fetch('http://localhost:8080/graphql', {
+    method: 'POST',
+    body: JSON.stringify({
+      query:
+        'mutation UntagEntity($input: UntagEntityInput!) { untagEntity(input: $input) { success } }',
+      variables: { input: { formationId: 'note', scopeValue: 'n-1', tagKeys: ['pinned'] } },
+    }),
+  });
+  assert.deepEqual(nativeCalled, { f: 'note', s: 'n-1', k: ['pinned'] });
+  const body = (await resp.json()) as { data: { untagEntity: { success: boolean } } };
+  assert.equal(body.data.untagEntity.success, true);
+});
+
+test('agent-bridge routes expireDroplet natively', async () => {
+  let nativeCalled: { f?: string; s?: string } = {};
+  const ctx = mockCtx({
+    db: {
+      ...dbBase,
+      expire: async (f: string, s: string) => {
+        nativeCalled = { f, s };
+      },
+    },
+  });
+  setCtx(ctx);
+
+  const host = makeBoltNativeHost(ctx);
+  const resp = await host.fetch('http://localhost:8080/graphql', {
+    method: 'POST',
+    body: JSON.stringify({
+      query:
+        'mutation ExpireDroplet($input: ExpireDropletInput!) { expireDroplet(input: $input) { success } }',
+      variables: { input: { formationId: 'note', scopeValue: 'n-1' } },
+    }),
+  });
+  assert.deepEqual(nativeCalled, { f: 'note', s: 'n-1' });
+  const body = (await resp.json()) as { data: { expireDroplet: { success: boolean } } };
+  assert.equal(body.data.expireDroplet.success, true);
+});
+
+test('agent-bridge routes listKeys natively', async () => {
+  let nativeCalled: { f?: string; i?: string } = {};
+  const ctx = mockCtx({
+    db: {
+      ...dbBase,
+      listKeys: async (f: string, i: string) => {
+        nativeCalled = { f, i };
+        return { keys: [{ key: 'k1', size: 10, lastModified: '2026-01-01T00:00:00Z' }], nextCursor: null, hasMore: false, totalCount: 1 };
+      },
+    },
+  });
+  setCtx(ctx);
+
+  const host = makeBoltNativeHost(ctx);
+  const resp = await host.fetch('http://localhost:8080/graphql', {
+    method: 'POST',
+    body: JSON.stringify({
+      query: 'query ListKeys($input: ListKeysInput!) { listKeys(input: $input) { keys { key } } }',
+      variables: { input: { formationId: 'note', indexId: 'by-id-latest', first: 50 } },
+    }),
+  });
+  assert.deepEqual(nativeCalled, { f: 'note', i: 'by-id-latest' });
+  const body = (await resp.json()) as {
+    data: { listKeys: { keys: Array<{ key: string }> } };
+  };
+  assert.equal(body.data.listKeys.keys[0]?.key, 'k1');
+});
+
+test('agent-bridge routes executeSQL natively', async () => {
+  let nativeSql = '';
+  const ctx = mockCtx({
+    db: { ...dbBase },
+    sql: {
+      query: async (q: string) => {
+        nativeSql = q;
+        return { columns: ['n'], rows: [{ n: 1 }], rowCount: 1, durationMs: 1, truncated: false };
+      },
+    },
+  });
+  setCtx(ctx);
+
+  const host = makeBoltNativeHost(ctx);
+  const resp = await host.fetch('http://localhost:8080/graphql', {
+    method: 'POST',
+    body: JSON.stringify({
+      query: 'query ExecuteSQL($input: ExecuteSQLInput!) { executeSQL(input: $input) { rowCount } }',
+      variables: { input: { sql: 'SELECT 1 AS n' } },
+    }),
+  });
+  assert.equal(nativeSql, 'SELECT 1 AS n');
+  const body = (await resp.json()) as { data: { executeSQL: { rowCount: number } } };
+  assert.equal(body.data.executeSQL.rowCount, 1);
+});
+
 test('agent-bridge log surface delegates to ctx.log', () => {
   const events: string[] = [];
   const ctx = mockCtx({

@@ -70,7 +70,7 @@ function missingObjects(binding: string, input: unknown): never {
       `the substrate-side binding landed in phoenix commit af5e9eb. ` +
       `If you see this on a current lightning binary, capabilities.json ` +
       `is likely missing a buckets[] declaration. See ` +
-      `~/src/raindb-phoenix-lightning/docs/AUDIT_BOLT_SDK_GAPS.md §F ` +
+      `raindb-prime pkg/lightning/engines/goja/bindings.go ` +
       `for the gap card that owns this surface.`,
     { binding, input },
   );

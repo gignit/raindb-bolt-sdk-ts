@@ -2,7 +2,7 @@
 // name string the package emits.
 //
 // Per handoff doc §K cross-cutting reference (which points back at
-// PROJECT_REQUIREMENTS §3 in raindb-phoenix-lightning): no scattered
+// PROJECT_REQUIREMENTS §3 in raindb-prime): no scattered
 // magic strings. Every wrapper that names its binding for error
 // translation, log tagging, or stub dispatch references one of these
 // constants. When the substrate-side agent renames a binding (rare;
