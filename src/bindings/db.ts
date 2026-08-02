@@ -91,8 +91,10 @@ export interface ListDropletsInput {
 export interface ListKeysInput {
   formationId: string;
   /**
-   * Index name on the formation. Use `by-id-latest` for the
-   * default pointer-by-id index. Required.
+   * Index name on the formation. Use `by-id` for the default
+   * pointer-by-id index (the name must match an index the formation
+   * actually declares -- a name the formation does not declare returns
+   * a 404 index-not-found, not an opaque 500). Required.
    */
   indexId: string;
   opts?: CursorPaginationOpts;
@@ -512,7 +514,7 @@ export const db = {
    * ```ts
    * const agent = await db.readLatest({
    *   formationId: 'agent-graph',
-   *   indexId: 'by-id-latest',
+   *   indexId: 'by-id',
    *   scopeValue: agentId,
    * });
    * if (agent === null) return { status: 404, body: 'not found' };
@@ -685,7 +687,7 @@ export const db = {
    * for (;;) {
    *   const page = await db.listKeys({
    *     formationId: 'broadcast',
-   *     indexId: 'by-id-latest',
+   *     indexId: 'by-id',
    *     opts: { first: 100, ...(cursor ? { after: cursor } : {}) },
    *   });
    *   for (const k of page.keys) await processKey(k);
@@ -957,7 +959,7 @@ export const db = {
 
   /**
    * STUB (audit §S Gap 14). Shorthand for readLatest with the default
-   * `by-id-latest` index.
+   * `by-id` index.
    *
    * @requires capability: `read` on the formation
    * @throws BindingNotInstalled until substrate ships ctx.db.readCurrent

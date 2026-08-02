@@ -83,7 +83,7 @@ export interface BoltMeta {
  *   const id = req.params['id'];
  *   const droplet = await db.readLatest({
  *     formationId: 'agent-graph',
- *     indexId: 'by-id-latest',
+ *     indexId: 'by-id',
  *     scopeValue: id ?? '',
  *   });
  *   return { status: 200, body: droplet ?? { error: 'not found' } };
