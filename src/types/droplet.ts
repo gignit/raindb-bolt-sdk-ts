@@ -130,3 +130,21 @@ export interface SincePage {
   readonly nextCursor?: string | null;
   readonly hasMore: boolean;
 }
+
+/**
+ * Page of droplets returned from `db.listDroplets` -- the enumerate-
+ * under-a-formation primitive with Relay-style cursor pagination.
+ * Mirrors {@link SincePage}; the substrate's `ListDropletsPage` is
+ * projected to JS by
+ * `pkg/lightning/engines/goja/bindings.go::listDropletsPageToJS`.
+ *
+ * Added when listDroplets gained pagination (substrate H12 fix). The
+ * prior wrapper returned a bare `Droplet[]` and could only ever see the
+ * first page; this page carries `nextCursor` + `hasMore` so a bolt can
+ * walk the whole formation and detect truncation.
+ */
+export interface DropletsPage {
+  readonly droplets: Droplet[];
+  readonly nextCursor?: string | null;
+  readonly hasMore: boolean;
+}

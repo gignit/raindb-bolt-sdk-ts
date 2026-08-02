@@ -44,6 +44,7 @@ import { BINDING } from '../internal/constants.js';
 import type {
   Droplet,
   DropletEnvelope,
+  DropletsPage,
   KeyPage,
   SincePage,
 } from '../types/droplet.js';
@@ -71,8 +72,20 @@ export interface WriteDropletInput {
 
 export interface ListDropletsInput {
   formationId: string;
-  prefix?: string;
+  /**
+   * Relay-style asc pagination (first/after) + optional prefix
+   * narrowing within the entity namespace. listDroplets now returns a
+   * {@link DropletsPage} so a bolt can walk a formation larger than one
+   * page and detect truncation; previously it returned a bare array and
+   * dropped the cursor, so only the first page was ever visible
+   * (substrate H12 fix). `pageSize` is retained as a deprecated alias
+   * for `opts.first` for source compatibility.
+   */
+  opts?: CursorPaginationOpts;
+  /** @deprecated use `opts.first`; retained for source compatibility. */
   pageSize?: number;
+  /** @deprecated use `opts.prefix`. */
+  prefix?: string;
 }
 
 export interface ListKeysInput {
@@ -376,9 +389,8 @@ export interface DbBinding {
   ): Promise<DropletEnvelope>;
   listDroplets(
     formationId: string,
-    prefix?: string,
-    pageSize?: number,
-  ): Promise<Droplet[]>;
+    opts?: CursorPaginationOpts,
+  ): Promise<DropletsPage>;
 
   // --- LIVE since v0.2.0 (substrate commit af5e9eb) ---
   // Positional args per the goja installer. opts.first/after for
@@ -606,22 +618,34 @@ export const db = {
    *
    * @example
    * ```ts
-   * const recent = await db.listDroplets({
-   *   formationId: 'broadcast',
-   *   prefix: 'topic/observability/',
-   *   pageSize: 100,
-   * });
+   * let cursor: string | undefined;
+   * for (;;) {
+   *   const page = await db.listDroplets({
+   *     formationId: 'broadcast',
+   *     opts: { first: 100, ...(cursor ? { after: cursor } : {}) },
+   *   });
+   *   for (const d of page.droplets) await handle(d);
+   *   if (!page.hasMore) break;
+   *   cursor = page.nextCursor ?? undefined;
+   * }
    * ```
    */
-  async listDroplets(input: ListDropletsInput): Promise<Droplet[]> {
+  async listDroplets(input: ListDropletsInput): Promise<DropletsPage> {
     const ctx = resolveCtx();
+    // Merge the deprecated top-level pageSize/prefix into opts so old
+    // call sites keep working while the canonical shape is opts.
+    const opts: CursorPaginationOpts = {
+      ...(input.opts ?? {}),
+      ...(input.opts?.first === undefined && input.pageSize !== undefined
+        ? { first: input.pageSize }
+        : {}),
+      ...(input.opts?.prefix === undefined && input.prefix !== undefined
+        ? { prefix: input.prefix }
+        : {}),
+    };
     try {
-      const out = await ctx.db.listDroplets(
-        input.formationId,
-        input.prefix,
-        input.pageSize,
-      );
-      return (out as Droplet[]) ?? [];
+      const out = await ctx.db.listDroplets(input.formationId, opts);
+      return (out as DropletsPage) ?? { droplets: [], hasMore: false };
     } catch (err) {
       translateBindingError(err, {
         binding: BINDING.db_listDroplets,

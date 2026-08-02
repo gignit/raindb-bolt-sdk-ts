@@ -33,6 +33,7 @@
 // stops compiling.
 
 import type { BoltContext } from '../types/bolt-context.js';
+import type { CursorPaginationOpts } from '../types/cursor.js';
 import { db } from '../bindings/db.js';
 import { sql } from '../bindings/sql.js';
 import { setCtx } from '../runtime/ctx-resolver.js';
@@ -305,25 +306,23 @@ async function tryRouteToNative(
       const formationId = String(input['formationId'] ?? '');
       const prefix = input['prefix'] as string | undefined;
       const pageSize = input['pageSize'] as number | undefined;
+      const after = input['after'] as string | undefined;
       if (!formationId) return undefined;
-      const listInput: {
-        formationId: string;
-        prefix?: string;
-        pageSize?: number;
-      } = { formationId };
-      if (prefix !== undefined) listInput.prefix = prefix;
-      if (pageSize !== undefined) listInput.pageSize = pageSize;
-      const out = await db.listDroplets(listInput);
-      // The @raindb/agent shape projects this as a {droplets[], nextCursor,
-      // hasMore} page envelope. The native binding returns just the array.
-      // For v0.1, project to the page envelope with hasMore=false; the
-      // agent's tool tolerates both shapes.
+      // listDroplets now returns a real {droplets, nextCursor, hasMore} page
+      // (substrate H12 fix), so pass the cursor through and forward the page
+      // envelope directly -- no more synthesizing hasMore from the array
+      // length against the requested page size.
+      const opts: CursorPaginationOpts = {};
+      if (pageSize !== undefined) opts.first = pageSize;
+      if (after !== undefined) opts.after = after;
+      if (prefix !== undefined) opts.prefix = prefix;
+      const page = await db.listDroplets({ formationId, opts });
       return {
         data: {
           listDroplets: {
-            droplets: out,
-            nextCursor: null,
-            hasMore: out.length === (pageSize ?? 50),
+            droplets: page.droplets,
+            nextCursor: page.nextCursor ?? null,
+            hasMore: page.hasMore,
           },
         },
       };
