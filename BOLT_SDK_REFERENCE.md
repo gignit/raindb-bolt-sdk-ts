@@ -36,11 +36,12 @@ export async function onHttpRequest(
 
 - The handler signature and `setCtx(ctx)` requirement come from
   `src/types/bolt-context.ts:76-91` and `src/runtime/ctx-resolver.ts:56-78`.
-- `setCtx(ctx)` registers the ambient context once; every `db.*`,
-  `auth.*`, etc. call resolves through it (`src/runtime/ctx-resolver.ts`).
-  Not calling `setCtx` throws `RainDBBoltError("setCtx(ctx) was not
-  called on this invocation.")` on the first binding call
-  (`src/runtime/ctx-resolver.ts:69-77`).
+- `setCtx(ctx)` is a required per-invocation convention; every `db.*`,
+  `auth.*`, etc. call resolves through the ambient context it sets
+  (`src/runtime/ctx-resolver.ts:56-78`). It is not enforced as
+  per-invocation state: `_ambient` is module-global, so forgetting `setCtx` in a
+  warm pod can reuse the preceding invocation's context. With no prior context,
+  the first binding call throws the documented `RainDBBoltError`.
 
 ### The two engines
 
@@ -61,10 +62,11 @@ wrapper and runs UNCHANGED on either engine:**
 ### Write-once, run-either-engine contract
 
 The TS wrapper (`src/bindings/*.ts`) is the **author-facing contract**.
-Each wrapper takes a named-args object, repacks it into the raw goja
-positional calling convention, and throws typed errors. The raw `ctx`
-that both engines expose is positional and identical in shape; the
-wrapper is what the author codes against.
+It exposes a mix of signatures: most `db.*` methods take a named-args object,
+while several namespaces and helpers are positional (`objects.*`, `cookies.*`,
+`crypto.*`, `jwt.*`, `tags.*`, and others). Where needed, a wrapper repacks its
+author-facing call into the raw positional substrate convention and translates
+typed errors. The wrapper is what the author codes against.
 
 ### Async vs. sync
 
@@ -97,7 +99,7 @@ namespace below. LIVE namespaces are installed by the substrate today;
 STUB namespaces have a typed wrapper but throw `BindingNotInstalled`
 until the substrate ships them.
 
-**Namespace summary (23 namespaces + `ctx.bolt`/`ctx.trigger` metadata):**
+**Namespace summary (24 namespaces + `ctx.bolt`/`ctx.trigger` metadata):**
 
 | Namespace | Status | Methods | Source (wrapper) |
 | --- | --- | --- | --- |
@@ -128,10 +130,10 @@ until the substrate ships them.
 | `ctx.bolt` | LIVE metadata | — | `src/types/bolt-context.ts:56-67` |
 | `ctx.trigger` | LIVE (non-HTTP invocations only) | — | `src/types/bolt-context.ts:193-198` |
 
-> A convention note that recurs below: **the wrapper takes a
-> `{formationId, ...}` named-args object; the raw goja binding is
-> positional** (e.g. `readLatest(formationId, indexId, scopeValue)`).
-> Where the raw binding differs materially it is noted per method.
+> A convention note that recurs below: **many `db.*` wrappers take a
+> `{formationId, ...}` named-args object and call a positional raw binding**
+> (e.g. `readLatest(formationId, indexId, scopeValue)`). Other wrappers are
+> positional already; each method below gives its actual signature.
 
 ---
 
@@ -143,6 +145,14 @@ Wrapper: `src/bindings/db.ts`. Raw goja installer:
 
 All wrapper methods return `Promise`. Return-shape citations refer to
 `src/types/droplet.ts`.
+
+The canonical `Droplet` shape is `{ dropletId, formationId, schemaVersion, ts,
+author, tenantId?, batchId?, payload, floatMeta?, pointerETag? }`. `ts` is a JS
+`number` containing Unix milliseconds, not a string, and `floatMeta` is an
+array of metadata records (`Record<string, unknown>[]`)
+(`src/types/droplet.ts:24-52`). The substrate's `dropletToMap` emits `batchId`,
+`floatMeta`, and `pointerETag` only when set, matching the Go `omitempty`
+contract (`internal/lightning/sdk_impl.go:1227-1250`).
 
 #### `readLatest(input: ReadLatestInput): Promise<Droplet | null>`
 - `src/bindings/db.ts:523-538`.
@@ -202,9 +212,13 @@ All wrapper methods return `Promise`. Return-shape citations refer to
 - Raw goja: `listKeys(formationId, indexId, opts?)` (`bindings.go:123-138`).
   Pod: `OpDBListKeys` → host `{page}`; node maps PascalCase entries
   (`dispatch.go:210-231`, `index.js:227-249`).
+- Both engines return `lastModified` as an ISO-8601 string. The pod mapping now
+  includes each entry's optional `etag`, matching goja
+  (`bindings.go:633-672`, `index.js:237-267`).
 - The wrapper guards `typeof ctx.db.listKeys !== 'function'` and throws
   `BindingNotInstalled` on older lightning binaries (`db.ts:701-711`).
-- Requires `list`.
+- Requires `list` **or** `read`; either capability satisfies the host gate
+  (`internal/lightning/sdk_impl.go:559-581`).
 
 #### `listSince(input: ListSinceInput): Promise<SincePage>`
 - LIVE since v0.2.0. `db.ts:759-785`.
@@ -250,13 +264,17 @@ All wrapper methods return `Promise`. Return-shape citations refer to
 - `WriteBatchItem = { payload: Record<string, unknown>; idempotencyKey? }`
   (`db.ts:125-128`).
 - `WriteBatchOpts = { idempotencyKey?; triggerFlows?; maxConcurrency? }`
-  (`db.ts:138-157`). `triggerFlows` defaults to `true` substrate-side
-  (`bindings.go:251`).
+  (`db.ts:138-157`). `triggerFlows` defaults to `true` on both engines,
+  including a pod call whose `opts` object omits the property
+  (`bindings.go:269-291`, `podchannel/dispatch.go:611-629`).
 - `WriteBatchResult = { total; succeeded; failed; items: BatchItemResult[] }`
   (`db.ts:198-203`). `BatchItemResult = { index; pathsWritten; dropletId?; scopeValue?; error? }`
   (`db.ts:181-190`). **Partial success is the contract** — `failed > 0`
   does NOT mean the whole call rejected; discriminate per item on
   `.error` (`db.ts:181-190`, `bindings.go:530-562`).
+- `pathsWritten` is normalized to `[]` when the substrate slice is nil; it is
+  never `null` on either engine (`bindings.go:561-599`,
+  `podchannel/dispatch.go:637-656`).
 - Raw goja: `writeBatch(formationId, items, opts?)` (`bindings.go:238-261`).
   Pod: `OpDBWriteBatch` (`dispatch.go:587-653`, `index.js:264-268`).
   Requires `write`.
@@ -397,6 +415,11 @@ positional `(bucket, key, ...)` through unchanged).
 The wrapper throws `BindingNotInstalled` when `ctx.objects === undefined`
 (`objects.ts::missingObjects` `:66-77`).
 
+Bucket declaration is necessary but not sufficient. The platform-private
+`objectsExtendedEnabled` tenant gate must also be enabled; otherwise every
+objects operation is rejected before the bucket capability check
+(`internal/lightning/sdk_impl.go:1316-1332`).
+
 ---
 
 ### 2.4 `ctx.sql` — analytical query plane (DuckDB / periscope)
@@ -493,7 +516,11 @@ LIVE. `src/bindings/cookies.ts`; raw goja `bindings.go::installCookiesBinding`
   RFC 6265 parse to a name→value map. `cookies.ts:48-59`.
 - `build(name: string, value: string, opts?: CookieOptions): Promise<string>`
   — `cookies.ts:78-93`. `CookieOptions = { path?; domain?; maxAge?; httpOnly?; secure?; sameSite?: 'Strict' | 'Lax' | 'None' }`
-  (`cookies.ts:14-22`). `maxAge` semantics: `<0` delete, `0` session.
+  (`cookies.ts:14-22`). Pod build/parse match the substrate `boltCookies`
+  exactly: values are written and parsed raw; `maxAge: 0` omits `Max-Age`
+  (session cookie), `maxAge < 0` emits `Max-Age=0` (delete), `SameSite`
+  defaults to `Lax`, and no `Expires` attribute is emitted
+  (`internal/lightning/sdk_impl.go:1747-1804`, `index.js:469-518`).
 
 ---
 
@@ -557,11 +584,10 @@ LIVE since v0.3.0. The binding is a **top-level callable**. Wrapper
   installer and pod client map to it (`dispatch.go:390-414`,
   `index.js:354-359`).
 - Requires bolt-level `schedule` (`capabilities.raindb.schedule: true`,
-  `engine.go:607`). **Capability-denial parity gap:** the substrate
-  denial message for schedule does NOT match `CAPABILITY_DENIAL_REGEX`
-  (the formation-shape regex), so a denial surfaces as a plain
-  `RainDBBoltError` carrying `binding: "ctx.schedule"` rather than a
-  typed `CapabilityDenied` (`schedule.ts:18-27`, `constants.ts:164-173`).
+  `engine.go:607`). Schedule denials are stamped `CapabilityDenied` by the
+  substrate, so the namespace-level denial is typed even though it does not
+  match the formation-shaped fallback regex
+  (`runtime/errorname.go:62-79`, `from-binding.ts:98-110`).
 - Throws `BindingNotInstalled` when `typeof ctx.schedule !== 'function'`
   (`schedule.ts::missingSchedule` `:101-113`).
 
@@ -569,9 +595,9 @@ LIVE since v0.3.0. The binding is a **top-level callable**. Wrapper
 
 ### 2.14 `ctx.response` — streaming (SSE) surface
 
-LIVE, but **present ONLY on `streaming: true` routes**. Wrapper
+LIVE on both engines, but **present ONLY on `streaming: true` routes**. Wrapper
 `src/bindings/response.ts`; raw goja `bindings.go::installResponseBinding`
-(`:1383-1460`), wired only when the dispatcher passes a StreamingWriter
+(`:1430-1507`), wired only when the dispatcher passes a StreamingWriter
 (`sandbox.go:164-165`). On non-streaming handlers `ctx.response` is
 `undefined` and each wrapper method throws
 `RainDBBoltError("... streaming is not enabled on this route ...")`
@@ -579,19 +605,21 @@ LIVE, but **present ONLY on `streaming: true` routes**. Wrapper
 
 - `setHeader(name: string, value: string): Promise<void>` — **MUST be
   called BEFORE the first write**; setting after the stream began panics
-  goja-side (`response.ts:59-76`, raw `bindings.go:1389-1403`).
+  goja-side (`response.ts:59-76`, raw `bindings.go:1436-1449`).
 - `beginStream(status?: number): Promise<void>` — optional; the first
-  `write()` infers status 200 (`response.ts:86-103`, raw `bindings.go:1405-1422`).
+  `write()` infers status 200 (`response.ts:86-103`, raw `bindings.go:1452-1468`).
 - `write(chunk: string | Uint8Array): Promise<number>` — returns the
   byte count written (Node `response.write()` parity); implicitly
-  `beginStream(200)` on first call (`response.ts:125-143`, raw `bindings.go:1424-1457`).
+  `beginStream(200)` on first call (`response.ts:125-143`, raw
+  `bindings.go:1471-1503`). Pod `Uint8Array` chunks are converted directly to
+  raw bytes rather than their comma-separated string representation
+  (`images/nodejs/supervisor/supervisor.js:176-190`).
 
 A streaming handler must NOT also return a non-empty body; the engine
-rejects that with a typed error (`sandbox.go:308-327`, `bolt-context.ts:200-208`).
-
-> NOTE: the pod Node client (`index.js`) does not build a `ctx.response`
-> namespace — streaming is a goja-engine surface in the current source.
-> This is a parity observation, not a documented gap.
+rejects that on both engines (`goja/sandbox.go:308-327`,
+`images/nodejs/supervisor/supervisor.js:231-245`). The pod supervisor creates
+`ctx.response` per invocation only when `req.streaming` is true
+(`supervisor.js:160-205`).
 
 ---
 
@@ -774,12 +802,16 @@ sandbox (`sandbox.go:192-244`). The pod supervisor matches this shape.
 | `params` | `Readonly<Record<string, string>>` | route params; empty object when none (`sandbox.go:195-203`) |
 | `headers` | `Readonly<Record<string, string \| string[]>>` | **keys LOWERCASED**; single values scalarized to a string, multi-values kept as arrays (`sandbox.go:204-222`) |
 | `query` | `Readonly<Record<string, string \| string[]>>` | single values scalarized, multi kept as arrays (`sandbox.go:223-235`) |
-| `body?` | `string` | raw text; empty string for GET/HEAD (`sandbox.go:236-239`) |
+| `body?` | `string` | raw text; absent when the request body is empty (`sandbox.go:236-244`) |
 | `json?` | `unknown` | present ONLY when the body parses as JSON (`sandbox.go:240-243`) |
 
 Header lowercasing lets handlers read `req.headers['cookie']` regardless
 of wire casing — matching Fetch/Express/Fastify/Hono convention
 (`sandbox.go:206-209`).
+
+The pod additionally supplies `req.text(): string` as a convenience; this is a
+pod-only additive method, not part of the cross-engine `BoltRequest` contract
+(`images/nodejs/supervisor/supervisor.js:140-158`).
 
 ---
 
@@ -870,7 +902,7 @@ wrapper routes its catch path through it. Class hierarchy in
 `src/errors/classes.ts`; all descend from `RainDBBoltError` so a bolt can
 catch the whole family with one `instanceof`.
 
-### Translation order (`from-binding.ts:44-123`)
+### Translation order (`from-binding.ts:51-136`)
 
 1. Already a `RainDBBoltError` → rethrown unchanged (no double-wrap).
 2. `Error.name` matches a known typed name → the matching typed subclass.
@@ -878,7 +910,7 @@ catch the whole family with one `instanceof`.
 4. Fall through → generic `RainDBBoltError` **preserving the original
    message**.
 
-### `Error.name` → typed subclass (`constants.ts:183-189`, `from-binding.ts:69-97`)
+### `Error.name` → typed subclass (`constants.ts:183-196`, `from-binding.ts:69-110`)
 
 | `Error.name` | Class | Class source |
 | --- | --- | --- |
@@ -887,21 +919,26 @@ catch the whole family with one `instanceof`.
 | `ConditionFailed` | `ConditionFailed` (CAS / create-only unsatisfied) | `classes.ts:149-154` |
 | `StatsValidation` | `StatsValidation` | `classes.ts:162-167` |
 | `AuthorRequired` | `AuthorRequired` | `classes.ts:174-178` |
+| `CapabilityDenied` | `CapabilityDenied` (formation-op and namespace-level denials) | `classes.ts:64-78` |
 
 ### Capability denials → `CapabilityDenied`
 
-The substrate emits capability errors as
+Both engines stamp the substrate classification into `Error.name`: goja uses
+`boltError`, while the pod carries `errorName` in its response frame
+(`goja/bindings.go:23-43`, `podchannel/server.go:246-252`,
+`podchannel/protocol.go:170-186`). This makes `TokenExists`, `TokenExpired`,
+`ConditionFailed`, `AuthorRequired`, and `CapabilityDenied` translate to their
+typed subclasses on both engines.
+
+The substrate emits formation capability errors as
 `ctx.<binding>: <op> on formation "<formationId>" not declared in capabilities`.
-`CAPABILITY_DENIAL_REGEX` (`constants.ts:202-203`) parses the `<op>`
+`CAPABILITY_DENIAL_REGEX` (`constants.ts:209-210`) parses the `<op>`
 (hyphens allowed, e.g. `object-read`, `relay-write`) and `<formationId>`;
 the wrapper throws `CapabilityDenied` with `.formationId` and `.op`
-populated (`classes.ts:64-78`, `from-binding.ts:106-113`).
-
-> **Known regex gap:** `ctx.schedule` denials do NOT match the
-> formation-shape regex (schedule is bolt-level, not per-formation), so a
-> schedule capability denial surfaces as a plain `RainDBBoltError`
-> carrying `binding: "ctx.schedule"` and the original message
-> (`schedule.ts:18-27`, `constants.ts:164-173`).
+populated (`classes.ts:64-78`, `from-binding.ts:105-109`). For namespace-level
+denials such as schedule or objects, the authoritative `CapabilityDenied` name
+still selects the typed subclass even when the formation regex cannot recover a
+formation id (`from-binding.ts:98-110`; `runtime/errorname.go:62-79`).
 
 ### `BindingNotInstalled`
 
@@ -917,7 +954,7 @@ from the `Error.name` switch (`from-binding.ts:61-63`).
 
 Any unrecognized error becomes a `RainDBBoltError` that **preserves the
 original message** and carries the `binding` name for log correlation
-(`from-binding.ts:116-122`; base class `classes.ts:28-38`).
+(`from-binding.ts:129-135`; base class `classes.ts:28-38`).
 
 ---
 
@@ -935,7 +972,7 @@ rejects any op not in `AllowedFormationOps` (`engine.go:613-615`):
 | --- | --- | --- |
 | `read` | `OpRead` | `readLatest`, `readDroplet`, `readAt`, `readCurrent`, token read |
 | `write` | `OpWrite` | `writeDroplet`, `writeBatch` |
-| `list` | `OpList` | `listDroplets`, `listKeys`, `listSince` |
+| `list` | `OpList` | `listDroplets`, `listKeys`, `listSince`; `listKeys` also accepts `read` |
 | `token-write` | `OpTokenWrite` | `writeToken`, token claim/delete |
 | `stats` | `OpStats` | stats increment/set/batch |
 | `tag` | `OpTag` | `tag`, `untag` (distinct from `write`) |
@@ -972,22 +1009,10 @@ host-side and identical across engines (§4).
 
 ## Appendix: parity gaps and ambiguities found
 
-The following are the substantive parity gaps / ambiguities observed
+The following are the remaining substantive parity gaps / ambiguities observed
 while cross-checking the four pieces against each other:
 
-1. **`ctx.response` (streaming) is goja-only in the current source.**
-   `installResponseBinding` exists in `bindings.go` and the wrapper in
-   `response.ts`, but `raindb-lightning-pods/sdk-clients/nodejs/index.js`
-   `makeCtx` builds no `response` namespace and no `OpResponse*` wire ops
-   exist in `protocol.go`/`dispatch.go`. A `streaming: true` route
-   therefore has no pod-engine implementation in this source snapshot.
-
-2. **`ctx.schedule` capability-denial is not typed.** The denial message
-   is bolt-level and does not match `CAPABILITY_DENIAL_REGEX`, so it
-   surfaces as a generic `RainDBBoltError`, not `CapabilityDenied`
-   (documented in-source at `schedule.ts:18-27`).
-
-3. **Result-wrapping asymmetry that MUST be maintained by hand.** The
+1. **Result-wrapping asymmetry that MUST be maintained by hand.** The
    host `okResp` wraps under `{row}`/`{page}`/`{values}`/`{days}` and the
    node client unwraps to match goja's direct-return shape. `listDroplets`
    and `listKeys` additionally require PascalCase→lowercase key mapping
@@ -995,7 +1020,7 @@ while cross-checking the four pieces against each other:
    struct JSON. Any new list/page-returning binding must replicate this
    mapping in all three implementing pieces or the two engines diverge.
 
-4. **Many namespaces are STUB in the TS wrapper** (`token`, `stats`,
+2. **Many namespaces are STUB in the TS wrapper** (`token`, `stats`,
    `relay`, `actions`, `vectors`, `files`, `catalog`, `formations`,
    `flows`, plus `db.readAt`/`readCurrent`/`resolveFormation` and
    `tags.replaceTags`). None have goja installers, `Op*` constants, or
@@ -1004,18 +1029,18 @@ while cross-checking the four pieces against each other:
    `catalog` are additionally flagged CONTRACT-UNCERTAIN in their
    wrappers (shapes may change before they ship).
 
-5. **`ctx.stats` op-string presence gap.** `OpStats = "stats"` is in
+3. **`ctx.stats` op-string presence gap.** `OpStats = "stats"` is in
    `AllowedFormationOps` (`engine.go:614`) but the stats binding itself
    is unshipped on every engine — the capability op exists ahead of the
    binding.
 
-6. **`sql.query` positional-index example is stale in one JSDoc.** The
+4. **`sql.query` positional-index example is stale in one JSDoc.** The
    `sql.query` return contract is correctly documented as column-keyed
    objects (`rows[i][columnName]`), but one `@example` in `sql.ts:200-204`
    still reads `r.rows[0]?.[nIdx]` using a numeric index — a doc
    inconsistency, not a runtime one (the runtime shape is named objects).
 
-7. **`objects.get` returns a string on both engines**, but the
+5. **`objects.get` returns a string on both engines**, but the
    underlying byte→string conversion differs (goja `string(data)` UTF-8;
    pod base64-decode then `.toString()`); binary blobs that are not valid
    UTF-8 may round-trip differently. Uint8Array return is explicitly
