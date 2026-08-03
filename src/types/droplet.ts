@@ -25,12 +25,29 @@ export interface Droplet {
   readonly dropletId: string;
   readonly formationId: string;
   readonly schemaVersion: number;
-  readonly ts: string;
+  /**
+   * Write timestamp in Unix MILLISECONDS. The substrate emits the Go
+   * `Droplet.TS int64` unchanged, so this is a JS `number` -- NOT a
+   * string. (Corrected from a prior `string` typo that never matched
+   * the runtime value on either engine.)
+   */
+  readonly ts: number;
   readonly author: string;
   readonly tenantId?: string;
+  /**
+   * Present only on droplets written as part of a batch (`db.writeBatch`).
+   * Emitted by the substrate only when non-empty (Go omitempty), so it is
+   * `undefined` on a single-write droplet.
+   */
   readonly batchId?: string;
   readonly payload: Record<string, unknown> | null;
-  readonly floatMeta?: Record<string, unknown> | null;
+  /**
+   * Per-float metadata records, one entry per floated binary field. An
+   * ARRAY (the Go shape is `[]map[string]any`); present only when the
+   * droplet has floated fields. Was previously mistyped as a single
+   * object.
+   */
+  readonly floatMeta?: Record<string, unknown>[];
   readonly pointerETag?: string | null;
 }
 
