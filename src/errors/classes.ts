@@ -68,9 +68,17 @@ export class CapabilityDenied extends RainDBBoltError {
   constructor(
     formationId: string,
     op: string,
-    init?: { binding?: string; input?: unknown },
+    init?: { binding?: string; input?: unknown; message?: string },
   ) {
-    super(`${op} on formation "${formationId}" not declared in capabilities`, init);
+    // For a formation-op denial the canonical message is synthesized from
+    // (op, formationId). For a namespace-level denial (e.g. schedule/objects,
+    // where formationId is "") the caller passes the original substrate
+    // message via init.message so it is preserved verbatim.
+    super(
+      init?.message ??
+        `${op} on formation "${formationId}" not declared in capabilities`,
+      init,
+    );
     this.name = 'CapabilityDenied';
     this.formationId = formationId;
     this.op = op;

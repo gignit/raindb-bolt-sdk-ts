@@ -186,6 +186,13 @@ export const ERROR_NAME = {
   ConditionFailed: 'ConditionFailed',
   StatsValidation: 'StatsValidation',
   AuthorRequired: 'AuthorRequired',
+  // The substrate now classifies capability denials (formation-op AND
+  // namespace-level like schedule/objects) with the name "CapabilityDenied"
+  // (runtime.BoltErrorName), carried on Error.name across both engines. The
+  // message-regex path below remains as a fallback for the formation-op
+  // shape, but the name is now authoritative and also covers the
+  // namespace-level denials the regex could not match.
+  CapabilityDenied: 'CapabilityDenied',
 } as const;
 
 /**

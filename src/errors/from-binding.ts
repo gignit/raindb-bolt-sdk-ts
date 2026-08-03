@@ -95,14 +95,27 @@ export function translateBindingError(
         throw new StatsValidation(msg, init);
       case ERROR_NAME.AuthorRequired:
         throw new AuthorRequired(msg, init);
+      case ERROR_NAME.CapabilityDenied: {
+        // The substrate authoritatively classified this as a capability
+        // denial (name set on both engines). Recover the rich formationId/op
+        // from the canonical formation-op message when present; for a
+        // namespace-level denial (schedule/objects) the regex misses, so
+        // construct with the binding namespace as the op and preserve the
+        // original message.
+        const cap = CAPABILITY_DENIAL_REGEX.exec(msg);
+        if (cap && cap[1] !== undefined && cap[2] !== undefined) {
+          throw new CapabilityDenied(cap[2], cap[1], init);
+        }
+        throw new CapabilityDenied('', ctx.binding ?? '', { ...init, message: msg });
+      }
       default:
         // fall through to message-pattern checks
         break;
     }
 
-    // (3) Capability errors arrive as plain Error with the canonical
-    // message format. Parse once; if the regex misses we fall through
-    // to the generic wrapper.
+    // (3) Capability errors may also arrive as a plain Error (no name) with
+    // the canonical formation-op message. Parse once; if the regex misses we
+    // fall through to the generic wrapper.
     const cap = CAPABILITY_DENIAL_REGEX.exec(msg);
     if (cap) {
       const op = cap[1];
