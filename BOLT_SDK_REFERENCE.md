@@ -176,15 +176,18 @@ contract (`internal/lightning/sdk_impl.go:1227-1250`).
 
 #### `writeDroplet(input: WriteDropletInput): Promise<DropletEnvelope>`
 - `db.ts`. `WriteDropletInput = { formationId; payload: Record<string, unknown> }`.
-- **Returns the FULL write result** (parity with the GraphQL `writeDroplet ->
-  WriteResult` surface; shape-audit CYCLE 3): `DropletEnvelope = { dropletId:
-  string; pathsWritten?: string[]; floatPaths?: string[]; publicUrls?: string[];
-  vectorRefs?: string[] }`. The array fields are present ONLY when the write
-  produced them — a plain write yields just `{ dropletId }`; a write that floats
-  a binary carries `floatPaths`/`publicUrls`; a write with an embedded field
-  carries `vectorRefs`. Both engines emit the same shape (goja `writeResultToJS`,
-  pod host + node-SDK). Previously the bolt path returned only `{ dropletId }`,
-  forcing a bolt to issue a second read for float/vector artifacts.
+- **Returns the FULL 9-field write result** (parity with the GraphQL
+  `writeDroplet -> WriteResult` surface; shape-audit CYCLE 3): `DropletEnvelope =
+  { dropletId: string; pathsWritten?: string[]; floatPaths?: string[];
+  publicUrls?: string[]; vectorRefs?: string[]; warnings?: string[]; scopeValue?:
+  string; pointerETag?: string; durationMs?: number }`. Optional fields are
+  present only when the write produced them: a plain write yields `{ dropletId,
+  pathsWritten, durationMs }` (the substrate always stamps the entity path +
+  duration); a float write adds `floatPaths`/`publicUrls`; an embedded field adds
+  `vectorRefs`; a formation with a scope key adds `scopeValue`; the by-id
+  `pointerETag` (for a follow-up CAS write) and any non-fatal `warnings` are
+  included when present. Both engines emit the same shape (goja `writeResultToJS`,
+  pod host + node-SDK). Previously the bolt path returned only `{ dropletId }`.
 - The wrapper throws a plain `Error` if the substrate did not return a
   `dropletId` string. Requires `write`; throws `ConditionFailed` on unsatisfied
   CAS controls.

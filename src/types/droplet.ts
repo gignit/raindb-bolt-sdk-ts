@@ -80,6 +80,14 @@ export interface DropletEnvelope {
   readonly publicUrls?: string[];
   /** Vector store references for any embedded fields. */
   readonly vectorRefs?: string[];
+  /** Non-fatal warnings surfaced by the write pipeline (e.g. an optional-index skip). */
+  readonly warnings?: string[];
+  /** The entity's scope value, when the formation declares a scope key. */
+  readonly scopeValue?: string;
+  /** The by-id pointer ETag after this write (for a subsequent CAS write). */
+  readonly pointerETag?: string;
+  /** Write wall-clock duration in milliseconds. */
+  readonly durationMs?: number;
 }
 
 /**

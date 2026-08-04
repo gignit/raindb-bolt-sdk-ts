@@ -102,6 +102,11 @@ export interface SqlFreshnessRow {
   /** Pointer-index key (a scope key) for snapshotDropletId. */
   snapshotKey: string;
   /**
+   * Snapshot commit time in Unix milliseconds. Optional -- absent when there
+   * is no committed snapshot. Mirrors the GraphQL FreshnessBookmark.snapshotAt.
+   */
+  snapshotAt?: number;
+  /**
    * lex-max dropletId in the formation right now, from by-update's
    * latest.json. Compare with snapshotDropletId to detect drift: when they
    * differ, harvest the gap via listKeys(after=snapshotDropletId) +

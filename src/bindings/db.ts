@@ -601,6 +601,10 @@ export const db = {
         floatPaths?: string[];
         publicUrls?: string[];
         vectorRefs?: string[];
+        warnings?: string[];
+        scopeValue?: string;
+        pointerETag?: string;
+        durationMs?: number;
       };
       const id = out.dropletId;
       if (typeof id !== 'string') {
@@ -608,16 +612,22 @@ export const db = {
           'ctx.db.writeDroplet: substrate did not return dropletId string',
         );
       }
-      // Carry the full write result -- the substrate returns pathsWritten /
-      // floatPaths / publicUrls / vectorRefs alongside dropletId (parity with
-      // the GraphQL writeDroplet surface; shape-audit CYCLE 3). Present only
-      // when non-empty, so a plain write yields just { dropletId }.
+      // Carry the FULL 9-field write result -- the substrate returns
+      // pathsWritten / floatPaths / publicUrls / vectorRefs / warnings /
+      // scopeValue / pointerETag / durationMs alongside dropletId (parity with
+      // the GraphQL writeDroplet -> WriteResult surface; shape-audit CYCLE 3,
+      // completed to the full set). Optional fields present only when the
+      // substrate emitted them.
       return {
         dropletId: id,
+        ...(out.durationMs !== undefined ? { durationMs: out.durationMs } : {}),
         ...(out.pathsWritten ? { pathsWritten: out.pathsWritten } : {}),
         ...(out.floatPaths ? { floatPaths: out.floatPaths } : {}),
         ...(out.publicUrls ? { publicUrls: out.publicUrls } : {}),
         ...(out.vectorRefs ? { vectorRefs: out.vectorRefs } : {}),
+        ...(out.warnings ? { warnings: out.warnings } : {}),
+        ...(out.scopeValue ? { scopeValue: out.scopeValue } : {}),
+        ...(out.pointerETag ? { pointerETag: out.pointerETag } : {}),
       };
     } catch (err) {
       translateBindingError(err, {
