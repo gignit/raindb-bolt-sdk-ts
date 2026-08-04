@@ -432,13 +432,18 @@ LIVE since v0.2.0. Wrapper `src/bindings/sql.ts`; raw goja
 - `SqlQueryInput = { sql: string; formationId?: string; timeoutMs?: number; withFreshness?: boolean }`
   (`sql.ts:51-75`). Wrapper repacks into positional `(sql, opts)`.
 - `SqlResult = { columns: string[]; rows: Array<Record<string, unknown>>; rowCount: number; durationMs: number; truncated: boolean; latest?: SqlFreshnessRow[] }`
-  (`sql.ts:115-132`). **`rows` are column-keyed objects** — read
-  `row[column]` — IDENTICAL to the GraphQL `executeSQL` shape
-  (`sql.ts:104-113`).
-- `SqlFreshnessRow = { formationId; snapshotCursor; currentLatest; stale }`
-  (`sql.ts:83-101`). Currently the Tier-1 substrate cut returns `latest`
-  only when non-empty; `withFreshness: true` still yields nil latest
-  (deferred) — `sql.ts:126-131`, host `sqlResultToJS` `:823-853`.
+  (`sql.ts`). **`rows` are column-keyed objects** — read `row[column]`.
+  The `rows` shape IS identical to the GraphQL `executeSQL` shape (a bolt
+  reads `row.<column>` unchanged migrating between the two surfaces).
+- `SqlFreshnessRow = { formationId; snapshotDropletId; snapshotKey; currentDropletId; currentKey; indexPrefix }`
+  (`sql.ts`). The CANONICAL 6-field freshness bookmark — IDENTICAL to the
+  GraphQL `executeSQL` `FreshnessBookmark` (shape audit CYCLE 2 corrected a
+  prior divergent 4-field `snapshotCursor/currentLatest/stale` shape). **Not
+  yet EMITTED on the bolt path**: the lightning executor returns nil `latest`
+  and logs "deferred", so `latest` is `undefined` from a bolt regardless of
+  `withFreshness` — use the `ctx.fetch->/graphql executeSQL` route for a live
+  bookmark. Harvest drift the same way both surfaces do:
+  `listKeys(after=snapshotDropletId)` + `readDroplet`, merge newest-wins.
 - Requires bolt-level `sql-read` (`capabilities.raindb.sqlRead: true`,
   `engine.go:596`). Throws `BindingNotInstalled` when `ctx.sql ===
   undefined` (`sql.ts::missingSql` `:153-164`).

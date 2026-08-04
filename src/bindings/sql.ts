@@ -75,29 +75,46 @@ export interface SqlQueryInput {
 }
 
 /**
- * One row of `SqlResult.latest`. Mirrors the substrate's
- * `runtime.FormationLatest` shape exactly. Currently unused in
- * the Tier 1 substrate cut; the shape is declared so the wrapper
- * is forward-compatible when the freshness bookmark wires up.
+ * One row of `SqlResult.latest`. The CANONICAL freshness bookmark --
+ * IDENTICAL to the GraphQL `executeSQL` `FreshnessBookmark` (the same six
+ * fields), so a bolt migrating between the `ctx.sql.query` and the
+ * `ctx.fetch->/graphql executeSQL` surfaces reads the bookmark unchanged.
+ * (Prior versions declared a divergent 4-field shape --
+ * snapshotCursor/currentLatest/stale -- that did NOT match the GraphQL
+ * surface; corrected in the GraphQL+Bolt shape audit, CYCLE 2.)
+ *
+ * NOTE: not yet EMITTED on the bolt `ctx.sql.query` path -- the lightning
+ * executor returns nil `latest` and logs a "deferred" warning today, so
+ * `SqlResult.latest` is `undefined` from a bolt regardless of
+ * `withFreshness`. Use the `ctx.fetch->/graphql executeSQL` route for a live
+ * bookmark until the bolt path wires the computation. The type is declared
+ * with the canonical fields so it is correct the moment it lands.
  */
 export interface SqlFreshnessRow {
   /** Formation the bookmark describes. */
   formationId: string;
   /**
-   * Periscope snapshot cursor at query execution time.
-   * Opaque string suitable for replay.
+   * lex-max dropletId reflected in the SQL view snapshot (the periscope
+   * tier manifest cursor as of the most recent committed pool). "" = no
+   * committed snapshot.
    */
-  snapshotCursor: string;
+  snapshotDropletId: string;
+  /** Pointer-index key (a scope key) for snapshotDropletId. */
+  snapshotKey: string;
   /**
-   * Latest known live cursor on the formation. Compare with
-   * snapshotCursor to detect drift.
+   * lex-max dropletId in the formation right now, from by-update's
+   * latest.json. Compare with snapshotDropletId to detect drift: when they
+   * differ, harvest the gap via listKeys(after=snapshotDropletId) +
+   * readDroplet and merge (newest wins).
    */
-  currentLatest: string;
+  currentDropletId: string;
+  /** Entity/droplet path for currentDropletId. */
+  currentKey: string;
   /**
-   * True when the snapshot is behind the live latest -- the
-   * caller may want to re-run after a refresh.
+   * by-update index prefix to ASC-scan for the harvest. "" = the formation
+   * declares no by-update index (bookmark unavailable).
    */
-  stale: boolean;
+  indexPrefix: string;
 }
 
 /**
@@ -124,9 +141,12 @@ export interface SqlResult {
   /** True when the result set was truncated to a substrate-side limit. */
   truncated: boolean;
   /**
-   * Freshness bookmark per formation. Absent in the Tier 1
-   * substrate cut (deferred to v0.3+ per substrate brain doc
-   * decision 4); the field is optional to match.
+   * Freshness bookmark per formation -- the CANONICAL 6-field shape
+   * identical to GraphQL executeSQL (see {@link SqlFreshnessRow}). NOT yet
+   * emitted on the bolt path (the lightning executor returns nil + warns
+   * "deferred"), so this is `undefined` from a bolt today regardless of
+   * `withFreshness`; use the ctx.fetch->/graphql executeSQL route for a live
+   * bookmark. Optional to match. (Shape audit CYCLE 2.)
    */
   latest?: SqlFreshnessRow[];
 }
