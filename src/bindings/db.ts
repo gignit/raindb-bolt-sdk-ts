@@ -592,14 +592,33 @@ export const db = {
   async writeDroplet(input: WriteDropletInput): Promise<DropletEnvelope> {
     const ctx = resolveCtx();
     try {
-      const out = await ctx.db.writeDroplet(input.formationId, input.payload);
-      const id = (out as { dropletId?: unknown }).dropletId;
+      const out = (await ctx.db.writeDroplet(
+        input.formationId,
+        input.payload,
+      )) as {
+        dropletId?: unknown;
+        pathsWritten?: string[];
+        floatPaths?: string[];
+        publicUrls?: string[];
+        vectorRefs?: string[];
+      };
+      const id = out.dropletId;
       if (typeof id !== 'string') {
         throw new Error(
           'ctx.db.writeDroplet: substrate did not return dropletId string',
         );
       }
-      return { dropletId: id };
+      // Carry the full write result -- the substrate returns pathsWritten /
+      // floatPaths / publicUrls / vectorRefs alongside dropletId (parity with
+      // the GraphQL writeDroplet surface; shape-audit CYCLE 3). Present only
+      // when non-empty, so a plain write yields just { dropletId }.
+      return {
+        dropletId: id,
+        ...(out.pathsWritten ? { pathsWritten: out.pathsWritten } : {}),
+        ...(out.floatPaths ? { floatPaths: out.floatPaths } : {}),
+        ...(out.publicUrls ? { publicUrls: out.publicUrls } : {}),
+        ...(out.vectorRefs ? { vectorRefs: out.vectorRefs } : {}),
+      };
     } catch (err) {
       translateBindingError(err, {
         binding: BINDING.db_writeDroplet,

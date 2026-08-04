@@ -175,15 +175,19 @@ contract (`internal/lightning/sdk_impl.go:1227-1250`).
   Requires `read`.
 
 #### `writeDroplet(input: WriteDropletInput): Promise<DropletEnvelope>`
-- `db.ts:592-609`. `WriteDropletInput = { formationId; payload: Record<string, unknown> }`
-  (`db.ts:68-71`).
-- Raw goja: `writeDroplet(formationId, payload)` → `{ dropletId }`
-  (`bindings.go:80-96`). Pod: `OpDBWriteDroplet` → `{ dropletId }`
-  (`dispatch.go:171-185`, `index.js:196-200`).
-- `DropletEnvelope = { dropletId: string }` (`droplet.ts:52-54`). The
-  wrapper throws a plain `Error` if the substrate did not return a
-  `dropletId` string (`db.ts:597-601`).
-- Requires `write`; throws `ConditionFailed` on unsatisfied CAS controls.
+- `db.ts`. `WriteDropletInput = { formationId; payload: Record<string, unknown> }`.
+- **Returns the FULL write result** (parity with the GraphQL `writeDroplet ->
+  WriteResult` surface; shape-audit CYCLE 3): `DropletEnvelope = { dropletId:
+  string; pathsWritten?: string[]; floatPaths?: string[]; publicUrls?: string[];
+  vectorRefs?: string[] }`. The array fields are present ONLY when the write
+  produced them — a plain write yields just `{ dropletId }`; a write that floats
+  a binary carries `floatPaths`/`publicUrls`; a write with an embedded field
+  carries `vectorRefs`. Both engines emit the same shape (goja `writeResultToJS`,
+  pod host + node-SDK). Previously the bolt path returned only `{ dropletId }`,
+  forcing a bolt to issue a second read for float/vector artifacts.
+- The wrapper throws a plain `Error` if the substrate did not return a
+  `dropletId` string. Requires `write`; throws `ConditionFailed` on unsatisfied
+  CAS controls.
 
 #### `listDroplets(input: ListDropletsInput): Promise<DropletsPage>`
 - `db.ts:635-657`.

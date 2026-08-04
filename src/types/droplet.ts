@@ -62,12 +62,24 @@ export interface DropletPage {
 }
 
 /**
- * Envelope for a written droplet -- the result of `db.writeDroplet`.
- * Mirrors @raindb/agent's `WriteResult` shape minus the agent-only
- * `durationMs` (the bolt SDK doesn't synthesize wall time).
+ * Envelope for a written droplet -- the result of `db.writeDroplet`. Carries
+ * the SAME field set as the GraphQL `writeDroplet -> WriteResult` surface so a
+ * bolt reads the dropletId AND any float/public/vector artifacts from the write
+ * itself, with no second read (shape-audit CYCLE 3, §9 one cross-surface shape).
+ * The array fields are present only when the write produced them (a float field
+ * -> floatPaths/publicUrls; a vector field -> vectorRefs), so a plain write
+ * yields just `{ dropletId }`.
  */
 export interface DropletEnvelope {
   readonly dropletId: string;
+  /** S3 paths written for the entity + its declared indexes. */
+  readonly pathsWritten?: string[];
+  /** Private-bucket paths of any floated binary fields. */
+  readonly floatPaths?: string[];
+  /** Public URLs of any floated binary fields pushed public. */
+  readonly publicUrls?: string[];
+  /** Vector store references for any embedded fields. */
+  readonly vectorRefs?: string[];
 }
 
 /**
