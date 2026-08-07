@@ -52,7 +52,7 @@ test('db.tag forwards (formationId, scopeValue, tags) positionally', async () =>
         readLatest: async () => null,
         readDroplet: async () => null,
         writeDroplet: async () => ({ dropletId: 'x' }),
-        listDroplets: async () => [],
+        listDroplets: async () => ({ droplets: [], hasMore: false }),
         tag: async (f: string, s: string, t: Record<string, string>) => {
           captured = { f, s, t };
         },
@@ -76,7 +76,7 @@ test('db.tag translates capability denial to CapabilityDenied', async () => {
         readLatest: async () => null,
         readDroplet: async () => null,
         writeDroplet: async () => ({ dropletId: 'x' }),
-        listDroplets: async () => [],
+        listDroplets: async () => ({ droplets: [], hasMore: false }),
         tag: async () => {
           throw new Error(
             'ctx.db.tag: tag on formation "agent-graph" not declared in capabilities',
@@ -128,7 +128,7 @@ test('db.untag forwards (formationId, scopeValue, tagKeys) positionally', async 
         readLatest: async () => null,
         readDroplet: async () => null,
         writeDroplet: async () => ({ dropletId: 'x' }),
-        listDroplets: async () => [],
+        listDroplets: async () => ({ droplets: [], hasMore: false }),
         untag: async (f: string, s: string, k: string[]) => {
           captured = { f, s, k };
         },
@@ -152,7 +152,7 @@ test('db.untag translates capability denial', async () => {
         readLatest: async () => null,
         readDroplet: async () => null,
         writeDroplet: async () => ({ dropletId: 'x' }),
-        listDroplets: async () => [],
+        listDroplets: async () => ({ droplets: [], hasMore: false }),
         untag: async () => {
           throw new Error(
             'ctx.db.untag: tag on formation "agent-graph" not declared in capabilities',
@@ -203,7 +203,7 @@ test('tags.tag (3-arg form) re-routes through ctx.db.tag', async () => {
         readLatest: async () => null,
         readDroplet: async () => null,
         writeDroplet: async () => ({ dropletId: 'x' }),
-        listDroplets: async () => [],
+        listDroplets: async () => ({ droplets: [], hasMore: false }),
         tag: async (f: string, s: string, t: Record<string, string>) => {
           captured = { f, s, t };
         },
@@ -224,7 +224,7 @@ test('tags.untag (3-arg form) re-routes through ctx.db.untag', async () => {
         readLatest: async () => null,
         readDroplet: async () => null,
         writeDroplet: async () => ({ dropletId: 'x' }),
-        listDroplets: async () => [],
+        listDroplets: async () => ({ droplets: [], hasMore: false }),
         untag: async (f: string, s: string, k: string[]) => {
           captured = { f, s, k };
         },
@@ -262,7 +262,7 @@ test('db.expire forwards (formationId, scopeValue) positionally', async () => {
         readLatest: async () => null,
         readDroplet: async () => null,
         writeDroplet: async () => ({ dropletId: 'x' }),
-        listDroplets: async () => [],
+        listDroplets: async () => ({ droplets: [], hasMore: false }),
         expire: async (f: string, s: string) => {
           called = { f, s };
         },
@@ -280,7 +280,7 @@ test('db.expire translates capability denial to CapabilityDenied with op="expire
         readLatest: async () => null,
         readDroplet: async () => null,
         writeDroplet: async () => ({ dropletId: 'x' }),
-        listDroplets: async () => [],
+        listDroplets: async () => ({ droplets: [], hasMore: false }),
         expire: async () => {
           throw new Error(
             'ctx.db.expire: expire on formation "agent-graph" not declared in capabilities',
@@ -326,7 +326,7 @@ test('db.expirationDays takes no args and returns number (sync substrate value)'
         readLatest: async () => null,
         readDroplet: async () => null,
         writeDroplet: async () => ({ dropletId: 'x' }),
-        listDroplets: async () => [],
+        listDroplets: async () => ({ droplets: [], hasMore: false }),
         // The substrate's installer surfaces this as a synchronous
         // value (s.rt.ToValue(db.ExpirationDays())). The wrapper
         // normalizes both sync and Promise returns to a Promise.
@@ -349,7 +349,7 @@ test('db.expirationDays returns 0 when no retention rule is configured', async (
         readLatest: async () => null,
         readDroplet: async () => null,
         writeDroplet: async () => ({ dropletId: 'x' }),
-        listDroplets: async () => [],
+        listDroplets: async () => ({ droplets: [], hasMore: false }),
         expirationDays: () => 0,
       },
     }),
@@ -386,7 +386,7 @@ test('db.writeBatch forwards (formationId, items, opts) and projects result shap
         readLatest: async () => null,
         readDroplet: async () => null,
         writeDroplet: async () => ({ dropletId: 'x' }),
-        listDroplets: async () => [],
+        listDroplets: async () => ({ droplets: [], hasMore: false }),
         writeBatch: async (f, items, opts) => {
           calledF = f;
           calledItems = items;
@@ -449,7 +449,7 @@ test('db.writeBatch surfaces partial-success (failed > 0 without rejection)', as
         readLatest: async () => null,
         readDroplet: async () => null,
         writeDroplet: async () => ({ dropletId: 'x' }),
-        listDroplets: async () => [],
+        listDroplets: async () => ({ droplets: [], hasMore: false }),
         writeBatch: async () => ({
           total: 3,
           succeeded: 2,
@@ -487,7 +487,7 @@ test('db.writeBatch translates capability denial to CapabilityDenied with op="wr
         readLatest: async () => null,
         readDroplet: async () => null,
         writeDroplet: async () => ({ dropletId: 'x' }),
-        listDroplets: async () => [],
+        listDroplets: async () => ({ droplets: [], hasMore: false }),
         writeBatch: async () => {
           throw new Error(
             'ctx.db.writeBatch: write on formation "agent-graph" not declared in capabilities',

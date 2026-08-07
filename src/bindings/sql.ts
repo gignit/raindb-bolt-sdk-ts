@@ -146,12 +146,15 @@ export interface SqlResult {
   /** True when the result set was truncated to a substrate-side limit. */
   truncated: boolean;
   /**
-   * Freshness bookmark per formation -- the CANONICAL 6-field shape
-   * identical to GraphQL executeSQL (see {@link SqlFreshnessRow}). NOT yet
-   * emitted on the bolt path (the lightning executor returns nil + warns
+   * Freshness bookmark per formation -- the CANONICAL 7-field shape
+   * identical to GraphQL executeSQL's FormationLatest (see
+   * {@link SqlFreshnessRow}: formationId, snapshotDropletId, snapshotKey,
+   * snapshotAt, currentDropletId, currentKey, indexPrefix). NOT yet emitted
+   * on the bolt path (the lightning executor returns nil + warns
    * "deferred"), so this is `undefined` from a bolt today regardless of
    * `withFreshness`; use the ctx.fetch->/graphql executeSQL route for a live
-   * bookmark. Optional to match. (Shape audit CYCLE 2.)
+   * bookmark. Optional to match. (Shape audit CYCLE 2; snapshotAt added,
+   * bringing the shape to 7 fields.)
    */
   latest?: SqlFreshnessRow[];
 }

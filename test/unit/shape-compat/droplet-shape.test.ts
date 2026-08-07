@@ -35,12 +35,16 @@ interface AgentDropletResult {
   dropletId: string;
   formationId: string;
   schemaVersion: number;
-  ts: string;
+  // ts is Unix-ms NUMBER (GraphQL Time marshals a bare number), and
+  // floatMeta is an ARRAY ([JSON!]) -- corrected to match the wire +
+  // @raindb/agent DropletResult after both were mistyped (ts:string,
+  // floatMeta:single-object). Keeps this parity guard green.
+  ts: number;
   author: string;
   tenantId?: string;
   batchId?: string;
   payload: Record<string, unknown> | null;
-  floatMeta?: Record<string, unknown> | null;
+  floatMeta?: Record<string, unknown>[];
   pointerETag?: string | null;
 }
 

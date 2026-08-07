@@ -16,7 +16,7 @@ export function mockCtx(overrides?: Partial<BoltContext>): BoltContext {
     readLatest: async () => null,
     readDroplet: async () => null,
     writeDroplet: async () => ({ dropletId: 'd-mock' }),
-    listDroplets: async () => [],
+    listDroplets: async () => ({ droplets: [], hasMore: false }),
   };
   const base: BoltContext = {
     bolt: {

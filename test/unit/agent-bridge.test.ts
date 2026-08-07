@@ -30,14 +30,14 @@ test('agent-bridge fetch intercepts substrate readLatest GraphQL', async () => {
           dropletId: 'd-1',
           formationId: f,
           schemaVersion: 1,
-          ts: '2026-01-01T00:00:00Z',
+          ts: 1767225600000,
           author: 'agent',
           payload: { hello: 'world' },
         };
       },
       readDroplet: async () => null,
       writeDroplet: async () => ({ dropletId: 'x' }),
-      listDroplets: async () => [],
+      listDroplets: async () => ({ droplets: [], hasMore: false }),
     },
     fetch: async () => {
       ctxFetchCalled = true;
@@ -158,7 +158,7 @@ test('agent-bridge fetch routes writeDroplet natively', async () => {
         nativeCalled = { f, p };
         return { dropletId: 'd-new' };
       },
-      listDroplets: async () => [],
+      listDroplets: async () => ({ droplets: [], hasMore: false }),
     },
   });
   setCtx(ctx);
@@ -190,7 +190,7 @@ const dbBase = {
   readLatest: async () => null,
   readDroplet: async () => null,
   writeDroplet: async () => ({ dropletId: 'x' }),
-  listDroplets: async () => [],
+  listDroplets: async () => ({ droplets: [], hasMore: false }),
 };
 
 test('agent-bridge routes tagEntity natively (was self-looping via GraphQL)', async () => {

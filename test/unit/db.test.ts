@@ -8,6 +8,7 @@ import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { db, setCtx, CapabilityDenied, RainDBBoltError } from '../../src/index.js';
+import type { CursorPaginationOpts } from '../../src/index.js';
 import { _resetCtxForTest } from '../../src/runtime/ctx-resolver.js';
 import { mockCtx } from './_helpers.js';
 
@@ -28,14 +29,14 @@ test('db.readLatest forwards positional args and returns droplet', async () => {
             dropletId: 'd-1',
             formationId: f,
             schemaVersion: 1,
-            ts: '2026-01-01T00:00:00Z',
+            ts: 1767225600000,
             author: 'agent',
             payload: { hello: 'world' },
           };
         },
         readDroplet: async () => null,
         writeDroplet: async () => ({ dropletId: 'x' }),
-        listDroplets: async () => [],
+        listDroplets: async () => ({ droplets: [], hasMore: false }),
       },
     }),
   );
@@ -61,7 +62,7 @@ test('db.readLatest returns null when substrate returns null', async () => {
         readLatest: async () => null,
         readDroplet: async () => null,
         writeDroplet: async () => ({ dropletId: 'x' }),
-        listDroplets: async () => [],
+        listDroplets: async () => ({ droplets: [], hasMore: false }),
       },
     }),
   );
@@ -84,7 +85,7 @@ test('db.readLatest translates capability error to CapabilityDenied', async () =
         },
         readDroplet: async () => null,
         writeDroplet: async () => ({ dropletId: 'x' }),
-        listDroplets: async () => [],
+        listDroplets: async () => ({ droplets: [], hasMore: false }),
       },
     }),
   );
@@ -115,7 +116,7 @@ test('db.readLatest wraps unknown error in RainDBBoltError', async () => {
         },
         readDroplet: async () => null,
         writeDroplet: async () => ({ dropletId: 'x' }),
-        listDroplets: async () => [],
+        listDroplets: async () => ({ droplets: [], hasMore: false }),
       },
     }),
   );
@@ -151,13 +152,13 @@ test('db.readDroplet forwards args and returns droplet', async () => {
             dropletId: d,
             formationId: f,
             schemaVersion: 1,
-            ts: '2026-01-01T00:00:00Z',
+            ts: 1767225600000,
             author: 'agent',
             payload: null,
           };
         },
         writeDroplet: async () => ({ dropletId: 'x' }),
-        listDroplets: async () => [],
+        listDroplets: async () => ({ droplets: [], hasMore: false }),
       },
     }),
   );
@@ -183,7 +184,7 @@ test('db.writeDroplet forwards args and returns envelope', async () => {
           assert.deepEqual(p, { agentId: 'a-1' });
           return { dropletId: 'd-new' };
         },
-        listDroplets: async () => [],
+        listDroplets: async () => ({ droplets: [], hasMore: false }),
       },
     }),
   );
@@ -205,7 +206,7 @@ test('db.writeDroplet throws when substrate returns wrong shape', async () => {
         // dropletId field. The wrapper's defensive check should fire.
         writeDroplet: async () =>
           ({ wrong: 'shape' }) as unknown as { dropletId: string },
-        listDroplets: async () => [],
+        listDroplets: async () => ({ droplets: [], hasMore: false }),
       },
     }),
   );
@@ -230,25 +231,28 @@ test('db.writeDroplet throws when substrate returns wrong shape', async () => {
 // ----------------------------- listDroplets -----------------------------
 
 test('db.listDroplets forwards args and returns array', async () => {
-  let called: { f?: string; p?: string | undefined; ps?: number | undefined } = {};
+  let called: { f?: string; o?: CursorPaginationOpts | undefined } = {};
   setCtx(
     mockCtx({
       db: {
         readLatest: async () => null,
         readDroplet: async () => null,
         writeDroplet: async () => ({ dropletId: 'x' }),
-        listDroplets: async (f: string, p?: string, ps?: number) => {
-          called = { f, p, ps };
-          return [
-            {
-              dropletId: 'd-1',
-              formationId: f,
-              schemaVersion: 1,
-              ts: '2026-01-01T00:00:00Z',
-              author: 'agent',
-              payload: null,
-            },
-          ];
+        listDroplets: async (f: string, o?: CursorPaginationOpts) => {
+          called = { f, o };
+          return {
+            droplets: [
+              {
+                dropletId: 'd-1',
+                formationId: f,
+                schemaVersion: 1,
+                ts: 1767225600000,
+                author: 'agent',
+                payload: null,
+              },
+            ],
+            hasMore: false,
+          };
         },
       },
     }),
@@ -259,9 +263,10 @@ test('db.listDroplets forwards args and returns array', async () => {
     prefix: 'topic/',
     pageSize: 25,
   });
-  assert.deepEqual(called, { f: 'broadcast', p: 'topic/', ps: 25 });
-  assert.equal(out.length, 1);
-  assert.equal(out[0]?.dropletId, 'd-1');
+  assert.equal(called.f, 'broadcast');
+  assert.deepEqual(called.o, { first: 25, prefix: 'topic/' });
+  assert.equal(out.droplets.length, 1);
+  assert.equal(out.droplets[0]?.dropletId, 'd-1');
 });
 
 // ----------------------------- ambient setup -----------------------------

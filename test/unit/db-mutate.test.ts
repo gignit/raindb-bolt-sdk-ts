@@ -40,7 +40,7 @@ const dbBase = {
   readLatest: async () => null,
   readDroplet: async () => null,
   writeDroplet: async () => ({ dropletId: 'x' }),
-  listDroplets: async () => [],
+  listDroplets: async () => ({ droplets: [], hasMore: false }),
 };
 
 // ============================================================

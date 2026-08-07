@@ -365,7 +365,7 @@ test('db.listKeys forwards (formationId, indexId, opts) positionally', async () 
         readLatest: async () => null,
         readDroplet: async () => null,
         writeDroplet: async () => ({ dropletId: 'x' }),
-        listDroplets: async () => [],
+        listDroplets: async () => ({ droplets: [], hasMore: false }),
         listKeys: async (f: string, i: string, o?: unknown) => {
           called = { f, i, o };
           return {
@@ -405,7 +405,7 @@ test('db.listKeys passes empty opts object when input.opts is absent', async () 
         readLatest: async () => null,
         readDroplet: async () => null,
         writeDroplet: async () => ({ dropletId: 'x' }),
-        listDroplets: async () => [],
+        listDroplets: async () => ({ droplets: [], hasMore: false }),
         listKeys: async (_f, _i, o?: unknown) => {
           capturedOpts = o;
           return { keys: [], hasMore: false, totalCount: 0 };
@@ -425,7 +425,7 @@ test('db.listKeys translates capability denial', async () => {
         readLatest: async () => null,
         readDroplet: async () => null,
         writeDroplet: async () => ({ dropletId: 'x' }),
-        listDroplets: async () => [],
+        listDroplets: async () => ({ droplets: [], hasMore: false }),
         listKeys: async () => {
           throw new Error(
             'ctx.db: list on formation "broadcast" not declared in capabilities',
@@ -462,7 +462,7 @@ test('db.listSince forwards (formationId, sinceCursor, opts) and returns SincePa
         readLatest: async () => null,
         readDroplet: async () => null,
         writeDroplet: async () => ({ dropletId: 'x' }),
-        listDroplets: async () => [],
+        listDroplets: async () => ({ droplets: [], hasMore: false }),
         listSince: async (f: string, s: string, o?: unknown) => {
           called = { f, s, o };
           return {
@@ -471,7 +471,7 @@ test('db.listSince forwards (formationId, sinceCursor, opts) and returns SincePa
                 dropletId: 'd-1',
                 formationId: f,
                 schemaVersion: 1,
-                ts: '2026-01-01T00:00:00Z',
+                ts: 1767225600000,
                 author: 'a',
                 payload: { x: 1 },
               },
@@ -505,7 +505,7 @@ test('db.listSince accepts empty sinceCursor for "from beginning"', async () => 
         readLatest: async () => null,
         readDroplet: async () => null,
         writeDroplet: async () => ({ dropletId: 'x' }),
-        listDroplets: async () => [],
+        listDroplets: async () => ({ droplets: [], hasMore: false }),
         listSince: async (_f, s: string) => {
           capturedCursor = s;
           return { droplets: [], hasMore: false };
@@ -526,7 +526,7 @@ test('db.listSince translates capability denial', async () => {
         readLatest: async () => null,
         readDroplet: async () => null,
         writeDroplet: async () => ({ dropletId: 'x' }),
-        listDroplets: async () => [],
+        listDroplets: async () => ({ droplets: [], hasMore: false }),
         listSince: async () => {
           throw new Error(
             'ctx.db: list on formation "broadcast" not declared in capabilities',
