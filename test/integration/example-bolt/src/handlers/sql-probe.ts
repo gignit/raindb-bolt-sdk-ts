@@ -42,9 +42,11 @@ export async function onSqlProbe(
         truncated: result.truncated,
         one,
         greeting,
-        // latest is undefined in the Tier 1 substrate cut (deferred
-        // per substrate brain doc decision 4). Surface as a hint.
+        // latest is present only when withFreshness:true AND the formation has
+        // a by-update index; this probe passes neither so it is absent here.
+        // When present, each row carries a freshnessStatus verdict.
         latestPresent: result.latest !== undefined,
+        freshnessStatus: result.latest?.[0]?.freshnessStatus ?? null,
       },
     };
   } catch (e) {

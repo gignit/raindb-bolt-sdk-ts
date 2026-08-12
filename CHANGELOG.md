@@ -8,6 +8,34 @@ Per the handoff doc §N, during the v0.x parallel-build phase: stubs may
 be swapped to live at any minor version bump; type changes to LIVE
 wrappers are breaking and trigger a minor version bump.
 
+## [0.7.0] - 2026-08-12
+
+Freshness bookmark is LIVE on `ctx.sql.query` and now carries the
+server-computed drift verdict. The lightning SQL executor builds the
+bookmark via the same shared `periscope.BuildFormationLatest` the GraphQL
+`executeSQL` resolver uses, so the bolt and GraphQL surfaces are byte
+parity. Type change to a LIVE wrapper -> minor bump.
+
+### Added
+
+- **`freshnessStatus` on `SqlFreshnessRow`.** The server-computed drift
+  verdict, typed as the new `FreshnessStatus` union
+  (`'CURRENT' | 'BEHIND' | 'UNKNOWN' | 'UNAVAILABLE'`). Read it directly
+  instead of comparing `snapshotDropletId` vs `currentDropletId` yourself
+  -- re-deriving is how clients get the cold-current guard wrong and
+  report false drift.
+- **`isBehind` / `isFresh` / `needsHarvest` helpers** (exported from the
+  package root) read the verdict: `isBehind` (BEHIND), `isFresh`
+  (CURRENT), `needsHarvest` (BEHIND or UNKNOWN -- harvest to be safe).
+
+### Fixed
+
+- **Purged the stale "freshness deferred / Tier 1 returns nil latest"
+  docs.** The bookmark is populated LIVE when `withFreshness: true`; the
+  `SqlQueryInput.withFreshness`, `SqlFreshnessRow`, `SqlResult.latest`,
+  and `sql` namespace docs (and the `@example`) now describe the live
+  behavior. The prior "6-field / deferred to v0.3+" claims were wrong.
+
 ## [0.6.0] - 2026-07-24
 
 Consistency pass: resolve the drift that accumulated as the SDK was

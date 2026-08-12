@@ -21,6 +21,9 @@ import {
   setCtx,
   objects,
   sql,
+  isBehind,
+  isFresh,
+  needsHarvest,
   db,
   BindingNotInstalled,
   CapabilityDenied,
@@ -266,7 +269,8 @@ test('sql.query forwards (sql, opts) and returns named (column-keyed) rows', asy
   assert.equal(result.rows[0]?.['n'], 1);
   assert.equal(result.rows[0]?.['name'], 'alice');
   assert.equal(result.rows[1]?.['name'], 'bob');
-  assert.equal(result.latest, undefined); // Tier 1 always nil
+  // withFreshness was not requested, so the substrate omits latest.
+  assert.equal(result.latest, undefined);
 });
 
 test('sql.query honors withFreshness option and tolerates absent latest field', async () => {
@@ -282,8 +286,9 @@ test('sql.query honors withFreshness option and tolerates absent latest field', 
             rowCount: 1,
             durationMs: 1,
             truncated: false,
-            // No latest field: substrate Tier 1 omits it even when
-            // withFreshness=true (deferred per brain doc decision 4).
+            // The substrate omits latest when empty (no by-update index, or
+            // withFreshness not honored for this formation). The wrapper must
+            // pass that through as undefined, not fabricate an empty array.
           };
         },
       },
@@ -292,6 +297,45 @@ test('sql.query honors withFreshness option and tolerates absent latest field', 
   const r = await sql.query({ sql: 'SELECT 1', withFreshness: true });
   assert.equal(capturedOpts?.withFreshness, true);
   assert.equal(r.latest, undefined);
+});
+
+test('sql.query surfaces the populated freshness bookmark incl. freshnessStatus', async () => {
+  setCtx(
+    mockCtx({
+      sql: {
+        query: async () => ({
+          columns: ['n'],
+          rows: [{ n: 3 }],
+          rowCount: 1,
+          durationMs: 2,
+          truncated: false,
+          // Substrate returns the canonical bookmark incl. the server-computed
+          // freshnessStatus verdict; the wrapper passes it through unchanged.
+          latest: [
+            {
+              formationId: 'orders',
+              snapshotDropletId: '019ff4a6',
+              snapshotKey: 'tenants/T/indexes/orders/by-update/019ff4a6/latest.json',
+              snapshotAt: 1786516211667,
+              currentDropletId: '019ff522',
+              currentKey: 'tenants/T/entities/orders/x/019ff522.json',
+              indexPrefix: 'tenants/T/indexes/orders/by-update/',
+              freshnessStatus: 'BEHIND',
+            },
+          ],
+        }),
+      },
+    }),
+  );
+  const r = await sql.query({ sql: 'SELECT count(*) AS n FROM entity."orders"', withFreshness: true });
+  assert.equal(r.latest?.length, 1);
+  const bm = r.latest![0]!;
+  assert.equal(bm.freshnessStatus, 'BEHIND');
+  assert.equal(bm.currentDropletId, '019ff522');
+  // The exported helpers read the verdict, not the raw cursors.
+  assert.equal(isBehind(bm), true);
+  assert.equal(isFresh(bm), false);
+  assert.equal(needsHarvest(bm), true);
 });
 
 test('sql.query translates capability denial to CapabilityDenied', async () => {

@@ -25,13 +25,13 @@
 //      belief that executeSQL was positional too; the substrate has
 //      since been aligned so BOTH return named objects.)
 //
-//   2. `SqlFreshnessRow` (the entries of `SqlResult.latest`) now
-//      mirrors the substrate's `FormationLatest` shape:
-//      `{ formationId, snapshotCursor, currentLatest, stale }`.
-//      The v0.1 stub guessed a different shape; the substrate
-//      wins. Tier 1 currently returns `latest` only when non-empty,
-//      and `withFreshness: true` still returns nil latest (deferred
-//      to v0.3+, per substrate brain doc decision 4).
+//   2. `SqlFreshnessRow` (the entries of `SqlResult.latest`) mirrors the
+//      substrate's `FormationLatest` shape field-for-field: the seven bookmark
+//      fields plus the server-computed `freshnessStatus` verdict. It is
+//      populated LIVE when `withFreshness: true` -- the lightning executor
+//      builds it via the same shared `periscope.BuildFormationLatest` the
+//      GraphQL `executeSQL` resolver calls, so the two surfaces are byte
+//      parity. `latest` is present only when non-empty.
 //
 // Capability gate: bolt-level `sql-read` (declared as
 // `capabilities.raindb.sqlRead: true` in bolt.json). Distinct from
@@ -65,30 +65,46 @@ export interface SqlQueryInput {
    */
   timeoutMs?: number;
   /**
-   * Ask the wrapper to populate the result's `latest[]` freshness
-   * bookmark per formation referenced in the query. Deferred --
-   * the Tier 1 substrate cut returns nil `latest` regardless of
-   * this flag (per substrate brain doc decision 4); a typed
-   * warning lands in a v0.3+ swap.
+   * Ask the substrate to populate the result's `latest[]` freshness bookmark
+   * (one {@link SqlFreshnessRow} per formation the query touches). LIVE: the
+   * lightning SQL executor builds the bookmark via the same shared
+   * `periscope.BuildFormationLatest` the GraphQL `executeSQL` resolver uses, so
+   * `ctx.sql.query({ withFreshness: true })` returns the identical bookmark the
+   * `ctx.fetch->/graphql executeSQL` route does. Omit or pass `false` and
+   * `latest` is left off the result entirely.
    */
   withFreshness?: boolean;
 }
 
 /**
- * One row of `SqlResult.latest`. The CANONICAL freshness bookmark --
- * IDENTICAL to the GraphQL `executeSQL` `FreshnessBookmark` (the same six
- * fields), so a bolt migrating between the `ctx.sql.query` and the
- * `ctx.fetch->/graphql executeSQL` surfaces reads the bookmark unchanged.
- * (Prior versions declared a divergent 4-field shape --
- * snapshotCursor/currentLatest/stale -- that did NOT match the GraphQL
- * surface; corrected in the GraphQL+Bolt shape audit, CYCLE 2.)
+ * The server-computed drift verdict for one formation's SQL snapshot versus its
+ * live writes. Read {@link SqlFreshnessRow.freshnessStatus} and switch on it --
+ * do NOT re-derive drift from the cursors yourself (re-deriving is how clients
+ * get the cold-current guard wrong and report false drift). The four states are
+ * actionably distinct:
  *
- * NOTE: not yet EMITTED on the bolt `ctx.sql.query` path -- the lightning
- * executor returns nil `latest` and logs a "deferred" warning today, so
- * `SqlResult.latest` is `undefined` from a bolt regardless of
- * `withFreshness`. Use the `ctx.fetch->/graphql executeSQL` route for a live
- * bookmark until the bolt path wires the computation. The type is declared
- * with the canonical fields so it is correct the moment it lands.
+ *   - `CURRENT`     -- snapshot covers the newest write; harvest nothing.
+ *   - `BEHIND`      -- live writes exist past the snapshot; harvest the tail.
+ *   - `UNKNOWN`     -- the current-side pointer could not be observed; drift is
+ *                      undetermined, so decide whether to harvest conservatively.
+ *   - `UNAVAILABLE` -- the formation declares no by-update index; there is no
+ *                      freshness bridge, so reconciliation is unsupported.
+ */
+export type FreshnessStatus = 'CURRENT' | 'BEHIND' | 'UNKNOWN' | 'UNAVAILABLE';
+
+/**
+ * One row of `SqlResult.latest`. The CANONICAL freshness bookmark -- IDENTICAL
+ * to the GraphQL `executeSQL` `FormationLatest` type, so a bolt migrating
+ * between the `ctx.sql.query` and the `ctx.fetch->/graphql executeSQL` surfaces
+ * reads the bookmark unchanged.
+ *
+ * The SQL (periscope) plane is eventually consistent: the columnar snapshot
+ * lags live droplet writes. This bookmark pairs WHERE THE SNAPSHOT IS
+ * (`snapshot*`) with WHERE THE FORMATION ACTUALLY IS (`current*`), and the
+ * server distills the two into {@link freshnessStatus} so you never compare the
+ * cursors yourself. When behind, harvest the tail:
+ * `listKeys({ prefix: indexPrefix, after: snapshotDropletId })` -> `readDroplet`
+ * each -> merge into the SQL rows (newest wins).
  */
 export interface SqlFreshnessRow {
   /** Formation the bookmark describes. */
@@ -103,23 +119,60 @@ export interface SqlFreshnessRow {
   snapshotKey: string;
   /**
    * Snapshot commit time in Unix milliseconds. Optional -- absent when there
-   * is no committed snapshot. Mirrors the GraphQL FreshnessBookmark.snapshotAt.
+   * is no committed snapshot. Mirrors the GraphQL FormationLatest.snapshotAt.
    */
   snapshotAt?: number;
   /**
-   * lex-max dropletId in the formation right now, from by-update's
-   * latest.json. Compare with snapshotDropletId to detect drift: when they
-   * differ, harvest the gap via listKeys(after=snapshotDropletId) +
-   * readDroplet and merge (newest wins).
+   * lex-max dropletId in the formation right now, from the formation-wide
+   * meta latest pointer. "" = the current side could not be observed (see
+   * {@link freshnessStatus} === 'UNKNOWN'). Prefer {@link freshnessStatus}
+   * over comparing this to snapshotDropletId yourself.
    */
   currentDropletId: string;
   /** Entity/droplet path for currentDropletId. */
   currentKey: string;
   /**
    * by-update index prefix to ASC-scan for the harvest. "" = the formation
-   * declares no by-update index (bookmark unavailable).
+   * declares no by-update index (see {@link freshnessStatus} === 'UNAVAILABLE').
    */
   indexPrefix: string;
+  /**
+   * The server-computed drift verdict -- read THIS to decide whether to
+   * harvest, rather than comparing snapshotDropletId vs currentDropletId
+   * yourself. See {@link FreshnessStatus}, or the {@link isBehind} /
+   * {@link isFresh} / {@link needsHarvest} helpers.
+   */
+  freshnessStatus: FreshnessStatus;
+}
+
+/**
+ * True when the SQL snapshot is KNOWN to be behind the formation's live writes
+ * (`freshnessStatus === 'BEHIND'`), i.e. there is a tail to harvest. False for
+ * CURRENT, UNKNOWN, and UNAVAILABLE -- it never claims drift the server could
+ * not substantiate.
+ */
+export function isBehind(row: SqlFreshnessRow): boolean {
+  return row.freshnessStatus === 'BEHIND';
+}
+
+/**
+ * True when the SQL snapshot is KNOWN to already cover the newest write
+ * (`freshnessStatus === 'CURRENT'`), so there is nothing to harvest. False for
+ * BEHIND, UNKNOWN, and UNAVAILABLE.
+ */
+export function isFresh(row: SqlFreshnessRow): boolean {
+  return row.freshnessStatus === 'CURRENT';
+}
+
+/**
+ * True when a client SHOULD harvest the tail to be safe: the snapshot is behind
+ * (`BEHIND`) OR the current side is undetermined (`UNKNOWN`, where the server
+ * could not confirm freshness). False only when the snapshot is confirmed
+ * current (`CURRENT`) or freshness is unavailable for the formation
+ * (`UNAVAILABLE`, no by-update index -- there is nothing to harvest against).
+ */
+export function needsHarvest(row: SqlFreshnessRow): boolean {
+  return row.freshnessStatus === 'BEHIND' || row.freshnessStatus === 'UNKNOWN';
 }
 
 /**
@@ -146,15 +199,13 @@ export interface SqlResult {
   /** True when the result set was truncated to a substrate-side limit. */
   truncated: boolean;
   /**
-   * Freshness bookmark per formation -- the CANONICAL 7-field shape
+   * Freshness bookmark per formation the query touched -- the CANONICAL shape
    * identical to GraphQL executeSQL's FormationLatest (see
-   * {@link SqlFreshnessRow}: formationId, snapshotDropletId, snapshotKey,
-   * snapshotAt, currentDropletId, currentKey, indexPrefix). NOT yet emitted
-   * on the bolt path (the lightning executor returns nil + warns
-   * "deferred"), so this is `undefined` from a bolt today regardless of
-   * `withFreshness`; use the ctx.fetch->/graphql executeSQL route for a live
-   * bookmark. Optional to match. (Shape audit CYCLE 2; snapshotAt added,
-   * bringing the shape to 7 fields.)
+   * {@link SqlFreshnessRow}). Populated LIVE when `withFreshness: true` was
+   * passed AND the formation declares a by-update index; `undefined` otherwise
+   * (the substrate omits it when empty, so bolts discriminate on presence).
+   * Read each row's {@link SqlFreshnessRow.freshnessStatus} to decide whether
+   * to harvest.
    */
   latest?: SqlFreshnessRow[];
 }
@@ -203,10 +254,11 @@ function missingSql(input: unknown): never {
  *
  * Audit §H (Gap 3). Substrate-side commit: af5e9eb.
  *
- * Cross-validation: matches @raindb/agent's `sql_execute` tool
- * shape (sql input; columns/rows/rowCount/durationMs/truncated
- * output) modulo the `latest[]` freshness bookmark (Tier 1
- * substrate cut returns it empty; deferred to v0.3+).
+ * Cross-validation: matches @raindb/agent's `sql_execute` tool shape (sql
+ * input; columns/rows/rowCount/durationMs/truncated output) AND the `latest[]`
+ * freshness bookmark, including the server-computed `freshnessStatus` verdict
+ * -- all three surfaces (GraphQL, this bolt binding, MCP) return the identical
+ * bookmark from the one shared `periscope.BuildFormationLatest`.
  */
 export const sql = {
   /**
@@ -231,11 +283,21 @@ export const sql = {
    * const n = (r.rows[0]?.[nIdx] as number) ?? 0;
    * ```
    *
-   * @example Freshness bookmark (currently deferred)
+   * @example Freshness bookmark -- reconcile a stale SQL view
    * ```ts
-   * const r = await sql.query({ sql: 'SELECT 1', withFreshness: true });
-   * // r.latest === undefined in the Tier 1 substrate cut;
-   * // populated in v0.3+ when the bookmark wires up.
+   * import { sql, needsHarvest } from '@raindb/bolt-sdk';
+   * const r = await sql.query({
+   *   sql: 'SELECT * FROM entity."orders"',
+   *   formationId: 'orders',
+   *   withFreshness: true,
+   * });
+   * for (const bm of r.latest ?? []) {
+   *   if (needsHarvest(bm)) {
+   *     // listKeys({ prefix: bm.indexPrefix, after: bm.snapshotDropletId })
+   *     // -> readDroplet each -> merge into r.rows (newest wins).
+   *   }
+   *   // bm.freshnessStatus is 'CURRENT' | 'BEHIND' | 'UNKNOWN' | 'UNAVAILABLE'
+   * }
    * ```
    */
   async query(input: SqlQueryInput): Promise<SqlResult> {

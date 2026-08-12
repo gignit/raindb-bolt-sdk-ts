@@ -47,7 +47,7 @@ export { schedule } from './bindings/schedule.js';
 export { token } from './bindings/token.js';
 export { stats } from './bindings/stats.js';
 export { objects } from './bindings/objects.js';
-export { sql } from './bindings/sql.js';
+export { sql, isBehind, isFresh, needsHarvest } from './bindings/sql.js';
 export { relay } from './bindings/relay.js';
 export { actions } from './bindings/actions.js';
 /**
@@ -133,6 +133,7 @@ export type {
   SqlQueryInput,
   SqlResult,
   SqlFreshnessRow,
+  FreshnessStatus,
 } from './bindings/sql.js';
 export type {
   RelayBinding,
