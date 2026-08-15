@@ -1,0 +1,16 @@
+# Downstream-owned compatibility lock: the raindb-prime state this bolt SDK's
+# wire types + host bindings were reconciled + validated against.
+upstreams:
+  raindb-prime:
+    reconciled_sha: b87edb5f
+    validation:
+      command: "make consumer-compat (raindb-prime): typescript-graphql-vs-sdl"
+      result: "0 hard failures; KeyEntry.lastModified:string cleared as goja-host boundary (RFC3339 by design), Droplet.ts:number correct for the Time! wire"
+      evidence:
+        - raindb-prime@8f77cf15   # deliberately set Droplet.ts=number (wire) + KeyEntry.lastModified=string (goja host)
+        - raindb-bolt-sdk-ts@2782aea
+    note: >-
+      The bolt SDK's boundary is the goja host bridge (ctx.db.*), not the GraphQL
+      wire. Its lastModified:string is CORRECT for that boundary (verified via coder
+      references + the adjudicating commit 8f77cf15). Vectors sent as number[]. No
+      shape changes required against the current raindb-prime SDL/SDK.
