@@ -2,7 +2,7 @@
 # wire types + host bindings were reconciled + validated against.
 upstreams:
   raindb-prime:
-    reconciled_sha: d623afa9
+    reconciled_sha: 5a7a2177
     validation:
       command: "coder_go_* re-verification of the goja-host boundary + boundary-source diff (peer-reviewed by an independent claude agent, 119 coder tool calls)"
       # BOUNDARY-SOURCE GUARD (widened after peer review): this SDK's Droplet
