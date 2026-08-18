@@ -2,15 +2,31 @@
 # wire types + host bindings were reconciled + validated against.
 upstreams:
   raindb-prime:
-    reconciled_sha: b87edb5f
+    reconciled_sha: d623afa9
     validation:
-      command: "make consumer-compat (raindb-prime): typescript-graphql-vs-sdl"
-      result: "0 hard failures; KeyEntry.lastModified:string cleared as goja-host boundary (RFC3339 by design), Droplet.ts:number correct for the Time! wire"
+      command: "coder_go_* re-verification of the goja-host boundary + boundary-source diff"
+      result: >-
+        UP TO DATE. Re-verified INDEPENDENTLY with coder (the prior lock was a
+        claim from an agent that did not demonstrably use coder; a lock is only
+        valid at its reconciled_sha, and HEAD had moved 17 commits past b87edb5f).
+        The bolt SDK's boundary is the goja HOST bridge (ctx.db.*), whose authority
+        is the Go binding source pkg/lightning/engines/goja/bindings.go + the pod
+        podchannel, NOT the GraphQL SDL. Re-confirmed: (1) NONE of the 17 commits
+        b87edb5f..d623afa9 touched bindings.go or podchannel/ -- the consumed
+        boundary is unchanged; (2) coder read of the current host binding
+        (bindings.go:689-706) shows lastModified is time.RFC3339 STRING + etag
+        emitted when non-empty -> KeyEntry.lastModified:string + etag:string are
+        CORRECT; (3) Droplet.ts is number (Go Droplet.TS int64) -> types/droplet.ts
+        Droplet.ts:number CORRECT. No shape change required.
       evidence:
-        - raindb-prime@8f77cf15   # deliberately set Droplet.ts=number (wire) + KeyEntry.lastModified=string (goja host)
+        - raindb-prime@8f77cf15   # Droplet.ts=number (wire) + KeyEntry.lastModified=string (goja host)
+        - raindb-prime@d623afa9   # HEAD; git log b87edb5f..d623afa9 -- bindings.go podchannel/ == empty
+        - "coder pkg/lightning/engines/goja/bindings.go:689-706 (lastModified RFC3339 string + etag)"
         - raindb-bolt-sdk-ts@2782aea
     note: >-
-      The bolt SDK's boundary is the goja host bridge (ctx.db.*), not the GraphQL
-      wire. Its lastModified:string is CORRECT for that boundary (verified via coder
-      references + the adjudicating commit 8f77cf15). Vectors sent as number[]. No
-      shape changes required against the current raindb-prime SDL/SDK.
+      The 17 unreconciled commits (wire/graphql=6, sdk=3, relay/action=12,
+      float/cdu=1) are GraphQL-wire / relay-ops / typed-error-400-sweep / test /
+      docs changes -- NONE crosses the goja-host bridge this SDK consumes. The
+      RelayView typed-enum (1b4bd88f) changed ReadRelayInput on the GraphQL wire,
+      not a host binding. No code change required; lock advanced after independent
+      coder re-verification.
