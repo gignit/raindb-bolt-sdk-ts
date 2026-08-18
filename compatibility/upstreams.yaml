@@ -4,29 +4,47 @@ upstreams:
   raindb-prime:
     reconciled_sha: d623afa9
     validation:
-      command: "coder_go_* re-verification of the goja-host boundary + boundary-source diff"
+      command: "coder_go_* re-verification of the goja-host boundary + boundary-source diff (peer-reviewed by an independent claude agent, 119 coder tool calls)"
+      # BOUNDARY-SOURCE GUARD (widened after peer review): this SDK's Droplet
+      # shape is emitted by internal/lightning/sdk_impl.go::dropletToMap (the
+      # SINGLE emit point, coder_go_callers: ReadLatest/ReadDroplet/ListDroplets/
+      # ListSince) -- NOT bindings.go. So the correct diff guard for "did the
+      # consumed boundary change?" is the WHOLE lightning surface, not just
+      # bindings.go/podchannel:
+      guard_paths:
+        - pkg/lightning/
+        - internal/lightning/
       result: >-
         UP TO DATE. Re-verified INDEPENDENTLY with coder (the prior lock was a
         claim from an agent that did not demonstrably use coder; a lock is only
-        valid at its reconciled_sha, and HEAD had moved 17 commits past b87edb5f).
-        The bolt SDK's boundary is the goja HOST bridge (ctx.db.*), whose authority
-        is the Go binding source pkg/lightning/engines/goja/bindings.go + the pod
-        podchannel, NOT the GraphQL SDL. Re-confirmed: (1) NONE of the 17 commits
-        b87edb5f..d623afa9 touched bindings.go or podchannel/ -- the consumed
-        boundary is unchanged; (2) coder read of the current host binding
-        (bindings.go:689-706) shows lastModified is time.RFC3339 STRING + etag
-        emitted when non-empty -> KeyEntry.lastModified:string + etag:string are
-        CORRECT; (3) Droplet.ts is number (Go Droplet.TS int64) -> types/droplet.ts
-        Droplet.ts:number CORRECT. No shape change required.
+        valid at its reconciled_sha, and HEAD had moved past b87edb5f). The bolt
+        SDK's boundary is the goja HOST bridge (ctx.db.*), whose authority is the
+        Go host emitters (internal/lightning/sdk_impl.go::dropletToMap +
+        pkg/lightning/engines/goja/bindings.go + the pod podchannel), NOT the
+        GraphQL SDL. Re-confirmed with coder: (1) git log b87edb5f..d623afa9 over
+        the guard_paths above touched NO host emitter -- the consumed boundary is
+        unchanged (pkg/sdk/types.go DID change [ReadRelayOptions.Fields->View] but
+        it does not reach the bridge; bindings.go/sdk_impl.go project from
+        runtime.*, never pkg/sdk); (2) dropletToMap (sdk_impl.go:1241) emits
+        Droplet.TS (Go int64) raw -> JS number, so types/droplet.ts Droplet.ts:
+        number is CORRECT; (3) listKeysPageToJS (bindings.go:695-706) emits
+        lastModified as time.RFC3339 STRING + etag ONLY when non-empty -> KeyEntry
+        .lastModified:string + etag?:string (OPTIONAL) are CORRECT. No shape
+        change required.
       evidence:
         - raindb-prime@8f77cf15   # Droplet.ts=number (wire) + KeyEntry.lastModified=string (goja host)
-        - raindb-prime@d623afa9   # HEAD; git log b87edb5f..d623afa9 -- bindings.go podchannel/ == empty
-        - "coder pkg/lightning/engines/goja/bindings.go:689-706 (lastModified RFC3339 string + etag)"
+        - "coder_go_callers dropletToMap -> 4 callers all in internal/lightning/sdk_impl.go (the Droplet emit point)"
+        - "coder internal/lightning/sdk_impl.go:1241 dropletToMap (Droplet.TS int64 -> JS number)"
+        - "coder pkg/lightning/engines/goja/bindings.go:695-706 (lastModified RFC3339 string + etag when non-empty)"
+        - "git log b87edb5f..d623afa9 -- pkg/lightning/ internal/lightning/ == empty (no host emitter changed)"
         - raindb-bolt-sdk-ts@2782aea
     note: >-
-      The 17 unreconciled commits (wire/graphql=6, sdk=3, relay/action=12,
-      float/cdu=1) are GraphQL-wire / relay-ops / typed-error-400-sweep / test /
-      docs changes -- NONE crosses the goja-host bridge this SDK consumes. The
-      RelayView typed-enum (1b4bd88f) changed ReadRelayInput on the GraphQL wire,
-      not a host binding. No code change required; lock advanced after independent
-      coder re-verification.
+      The unreconciled range b87edb5f..d623afa9 is 42 commits total; the
+      consumer-surface subset (godiff --cross-repo-drift) is ~17 (wire/graphql,
+      sdk, relay/action, float/cdu) -- ALL are GraphQL-wire / relay-ops /
+      typed-error-400-sweep / test / docs changes, NONE crossing the goja-host
+      bridge this SDK consumes. The RelayView typed-enum (1b4bd88f) changed
+      ReadRelayInput on the GraphQL wire + pkg/sdk, not a host binding. No code
+      change required; lock advanced after independent coder re-verification +
+      peer review. (etag is OPTIONAL -- etag?: string -- because the host emits it
+      only when non-empty; that optionality is the correct shape.)
