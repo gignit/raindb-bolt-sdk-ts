@@ -14,6 +14,13 @@ upstreams:
       guard_paths:
         - pkg/lightning/
         - internal/lightning/
+        # dropletToMap projects into a map[string]any, which ERASES the field
+        # type -- so a change to the SOURCE struct types.Droplet.{TS,FloatMeta,...}
+        # in pkg/types/droplet.go would compile clean and emit a wrong JS shape
+        # WITHOUT any internal/lightning file changing. (Contrast boltDB.ListKeys,
+        # which does typed KeyEntry->ListKeyEntry field assignment -> a drift
+        # there is a compile error.) So the source struct package MUST be guarded:
+        - pkg/types/
       result: >-
         UP TO DATE. Re-verified INDEPENDENTLY with coder (the prior lock was a
         claim from an agent that did not demonstrably use coder; a lock is only
@@ -24,8 +31,13 @@ upstreams:
         GraphQL SDL. Re-confirmed with coder: (1) git log b87edb5f..d623afa9 over
         the guard_paths above touched NO host emitter -- the consumed boundary is
         unchanged (pkg/sdk/types.go DID change [ReadRelayOptions.Fields->View] but
-        it does not reach the bridge; bindings.go/sdk_impl.go project from
-        runtime.*, never pkg/sdk); (2) dropletToMap (sdk_impl.go:1241) emits
+        it does not reach the bolt-facing shape: there is NO relay host binding at
+        all -- relay.* has no installer in bindings.go and no Op* in podchannel,
+        and coder_go_references ReadRelayOptions/RelayView show ZERO refs under
+        pkg/lightning or internal/lightning. [Note: sdk_impl.go DOES import pkg/sdk
+        -- it is the layer that calls sdk.Client -- so the guard is by REACHABILITY
+        of the changed symbol to a bolt-facing emitter, not by package.]);
+        (2) dropletToMap (sdk_impl.go:1241) emits
         Droplet.TS (Go int64) raw -> JS number, so types/droplet.ts Droplet.ts:
         number is CORRECT; (3) listKeysPageToJS (bindings.go:695-706) emits
         lastModified as time.RFC3339 STRING + etag ONLY when non-empty -> KeyEntry
@@ -38,13 +50,23 @@ upstreams:
         - "coder pkg/lightning/engines/goja/bindings.go:695-706 (lastModified RFC3339 string + etag when non-empty)"
         - "git log b87edb5f..d623afa9 -- pkg/lightning/ internal/lightning/ == empty (no host emitter changed)"
         - raindb-bolt-sdk-ts@2782aea
-    note: >-
-      The unreconciled range b87edb5f..d623afa9 is 42 commits total; the
-      consumer-surface subset (godiff --cross-repo-drift) is ~17 (wire/graphql,
-      sdk, relay/action, float/cdu) -- ALL are GraphQL-wire / relay-ops /
-      typed-error-400-sweep / test / docs changes, NONE crossing the goja-host
-      bridge this SDK consumes. The RelayView typed-enum (1b4bd88f) changed
-      ReadRelayInput on the GraphQL wire + pkg/sdk, not a host binding. No code
-      change required; lock advanced after independent coder re-verification +
-      peer review. (etag is OPTIONAL -- etag?: string -- because the host emits it
-      only when non-empty; that optionality is the correct shape.)
+      scope: >-
+        This lock verifies the GOJA host boundary (the emitters in bindings.go +
+        sdk_impl.go + the pkg/types source structs they read). POD-engine shape
+        parity is NOT verified here: podchannel handleDBListKeys returns the raw
+        runtime.ListKeysPage (no json tags), while goja emits a lowercase shape --
+        a pod node-SDK may remap it in a third repo. Tracked as R1 in
+        raindb-prime docs/followup/tsdk-bolt-sdk-probe-and-sdk-gaps.md. The
+        bolt-sdk types are correct for the goja boundary, which is this SDK's
+        primary target.
+      note: >-
+        The unreconciled range b87edb5f..d623afa9 is 42 commits total; the
+        consumer-surface subset (godiff --cross-repo-drift) is ~17 (wire/graphql,
+        sdk, relay/action, float/cdu) -- ALL are GraphQL-wire / relay-ops /
+        typed-error-400-sweep / test / docs changes, NONE crossing the goja-host
+        bridge this SDK consumes. No code change required; lock advanced after
+        independent coder re-verification + peer review. (etag is OPTIONAL --
+        etag?: string -- because the host emits it only when non-empty; that
+        optionality is the correct shape.) Validated-By is currently a coder
+        re-verification; the executable live case (a probe bolt through the goja
+        sandbox) is tracked as followup F -- a known, documented debt.
