@@ -1,38 +1,72 @@
-// bindings/files.ts -- STUBBED ctx.files.* surface.
-// Audit §O (Gap 10).
+// bindings/files.ts -- ctx.files.* surface (file upload/download reservation).
+//
+// File upload/download is a LOW-FREQUENCY operation, so it is served over the
+// RainDB GraphQL API via ctx.fetch (see runtime/graphql.ts) rather than a
+// dedicated native goja/pod fast-path binding. reserveUpload + reserveDownload
+// are LIVE via that route (they need only the RAINDB_GRAPHQL_ENDPOINT +
+// RAINDB_GRAPHQL_KEY secrets declared -- see runtime/graphql.ts). If a future
+// runtime installs a native ctx.files binding, these prefer it automatically.
+//
+// pushPublic + readMeta remain graphql-backable but are not implemented yet
+// (no app has needed them); they throw a clear RainDBBoltError until added.
 
 import { resolveCtx } from '../runtime/ctx-resolver.js';
-import { stubOrDispatch } from '../runtime/binding-not-installed.js';
-import { BINDING } from '../internal/constants.js';
+import { RainDBBoltError } from '../errors/classes.js';
+import { boltGraphQL } from '../runtime/graphql.js';
+import type { FetchResponse } from './fetch.js';
+import { fetch as ctxFetch } from './fetch.js';
 
 export interface ReserveUploadInput {
   formationId: string;
-  scopeValue: string;
-  fieldName: string;
-  opts?: {
-    contentType?: string;
-    maxBytes?: number;
-    ttlSec?: number;
-  };
+  /** The file's filename (used for the float path + the reservation). */
+  filename: string;
+  /** MIME type of the upload. */
+  contentType: string;
+  /** Byte length of the file being uploaded. */
+  fileSize: number;
+  /** The write author for the droplet written alongside the reservation. */
+  author: string;
+  /** The droplet payload written with the reservation (entity fields). */
+  payload?: Record<string, unknown>;
+  /**
+   * CAS guard for REPLACING/versioning an existing entity's file: pass the
+   * current entry's dropletId. Omit for a first upload. On a `revisions:true`
+   * float this yields a new retained version at `ver/<versionId>/`.
+   */
+  expectedPriorDropletId?: string;
 }
 
 export interface ReserveUploadResult {
+  /** PUT the bytes here (presigned S3 URL, no proxy through the bolt). */
   uploadUrl: string;
+  /** Headers to send with the PUT (includes x-amz-content-sha256). */
   headers: Record<string, string>;
+  /** ISO 8601 expiry of the presigned URL. */
   expiresAt: string;
+  /** The float object key the bytes land at (carries ver/<versionId>/). */
   objectKey: string;
+  /** The entity's stable scopeValue (mint on a create). */
+  scopeValue: string;
+  /** The reserved droplet's id. */
+  dropletId: string;
+  /** Public URL when the float field is public. */
+  publicUrl?: string;
 }
 
 export interface ReserveDownloadInput {
   formationId: string;
-  scopeValue: string;
-  fieldName: string;
-  opts?: { ttlSec?: number };
+  /** The dropletId (revision) whose floated bytes to read. */
+  dropletId: string;
 }
 
 export interface ReserveDownloadResult {
+  /** A data: URL of the bytes (directly usable) -- the graphql route returns bytes, not a presigned GET. */
   downloadUrl: string;
+  /** ISO 8601 expiry (advisory for the data URL). */
   expiresAt: string;
+  contentType: string;
+  size: number;
+  dataBase64: string;
 }
 
 export interface PushPublicInput {
@@ -81,81 +115,147 @@ export interface FilesBinding {
  * Cross-validation: pushPublic shape matches @raindb/agent's
  * `droplet_push_public` tool's `PushPublicResult`.
  */
+// Native-binding preference: if a runtime ever installs ctx.files.<method>,
+// use it; otherwise run the op over GraphQL. Keeps the wrapper future-proof
+// without ever throwing BindingNotInstalled for the graphql-served methods.
+function nativeFiles(): FilesBinding | undefined {
+  return (resolveCtx() as unknown as { files?: FilesBinding }).files;
+}
+
+// --- GraphQL operation documents (low-frequency file ops) ---
+
+const RESERVE_DIRECT_UPLOAD = `
+  mutation($in: ReserveDirectUploadInput!) {
+    reserveDirectUpload(input: $in) {
+      scopeValue dropletId uploadUrl publicUrl expiresAt entityPath floatPath
+    }
+  }`;
+
+const READ_FLOAT = `
+  query($in: ReadFloatInput!) {
+    readFloat(input: $in) { contentType size path bucket dataBase64 }
+  }`;
+
 export const files = {
   /**
-   * STUB. Reserve a pre-signed S3 upload URL the client uploads to
-   * directly (no proxy through bolt).
-   * @throws BindingNotInstalled
+   * Reserve a pre-signed S3 upload URL. The client (or the bolt) PUTs bytes
+   * straight to `uploadUrl` -- no proxy through the bolt. On a formation whose
+   * float field has `revisions: true`, each upload is retained as a new version
+   * at `ver/<versionId>/`.
+   *
+   * LIVE over the GraphQL route (ctx.fetch). Requires the RAINDB_GRAPHQL_ENDPOINT
+   * + RAINDB_GRAPHQL_KEY secrets (see runtime/graphql.ts). To replace/version an
+   * existing entity's file, pass `opts.expectedPriorDropletId` (CAS guard).
+   *
+   * @param input.payload    the droplet payload written alongside the reservation
+   * @param input.author     the write author (required by reserveDirectUpload)
    */
   async reserveUpload(input: ReserveUploadInput): Promise<ReserveUploadResult> {
-    const ctx = resolveCtx();
-    return stubOrDispatch<ReserveUploadResult>(
-      BINDING.files_reserveUpload,
-      () =>
-        (ctx as unknown as { files?: FilesBinding }).files?.reserveUpload,
-      (fn) =>
-        (
-          fn as (i: ReserveUploadInput) => Promise<ReserveUploadResult>
-        )(input),
-      input,
-    );
+    const native = nativeFiles()?.reserveUpload;
+    if (typeof native === 'function') {
+      return native(input) as Promise<ReserveUploadResult>;
+    }
+
+    const data = await boltGraphQL<{
+      reserveDirectUpload: {
+        scopeValue: string;
+        dropletId: string;
+        uploadUrl: string;
+        publicUrl?: string | null;
+        expiresAt: string;
+        entityPath: string;
+        floatPath: string;
+      };
+    }>(RESERVE_DIRECT_UPLOAD, {
+      in: {
+        formationId: input.formationId,
+        filename: input.filename,
+        contentType: input.contentType,
+        fileSize: input.fileSize,
+        author: input.author,
+        ...(input.payload ? { payload: input.payload } : {}),
+        ...(input.expectedPriorDropletId
+          ? { expectedPriorDropletId: input.expectedPriorDropletId }
+          : {}),
+      },
+    });
+    const r = data.reserveDirectUpload;
+    return {
+      uploadUrl: r.uploadUrl,
+      headers: { 'x-amz-content-sha256': 'UNSIGNED-PAYLOAD' },
+      expiresAt: r.expiresAt,
+      objectKey: r.floatPath,
+      scopeValue: r.scopeValue,
+      dropletId: r.dropletId,
+      ...(r.publicUrl ? { publicUrl: r.publicUrl } : {}),
+    };
   },
 
   /**
-   * STUB. Reserve a pre-signed S3 download URL.
-   * @throws BindingNotInstalled
+   * Download a floated file's BYTES for a specific revision. Because a
+   * `revisions: true` float retains every version, any historical dropletId
+   * resolves that version's bytes -- the per-version-download capability.
+   *
+   * LIVE over the GraphQL route (readFloat). Returns the bytes as base64 (the
+   * bolt decodes/streams them); this is distinct from a presigned-GET URL,
+   * which is not a GraphQL operation.
+   *
+   * @param input.fieldName carries the dropletId to read (the revision to fetch)
    */
-  async reserveDownload(
-    input: ReserveDownloadInput,
-  ): Promise<ReserveDownloadResult> {
-    const ctx = resolveCtx();
-    return stubOrDispatch<ReserveDownloadResult>(
-      BINDING.files_reserveDownload,
-      () =>
-        (ctx as unknown as { files?: FilesBinding }).files
-          ?.reserveDownload,
-      (fn) =>
-        (
-          fn as (i: ReserveDownloadInput) => Promise<ReserveDownloadResult>
-        )(input),
-      input,
-    );
+  async reserveDownload(input: ReserveDownloadInput): Promise<ReserveDownloadResult> {
+    const native = nativeFiles()?.reserveDownload;
+    if (typeof native === 'function') {
+      return native(input) as Promise<ReserveDownloadResult>;
+    }
+    const dropletId = input.dropletId;
+    const data = await boltGraphQL<{
+      readFloat: { contentType: string; size: number; dataBase64: string } | null;
+    }>(READ_FLOAT, { in: { formationId: input.formationId, dropletId } });
+    if (!data.readFloat) {
+      throw new RainDBBoltError(
+        `files.reserveDownload: no float for droplet ${dropletId} in ${input.formationId}`,
+        { binding: 'ctx.files.reserveDownload', input },
+      );
+    }
+    // The GraphQL route returns bytes, not a presigned URL -- expose both a
+    // data: URL (usable directly) and the raw base64 + metadata.
+    const f = data.readFloat;
+    return {
+      downloadUrl: `data:${f.contentType};base64,${f.dataBase64}`,
+      expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+      contentType: f.contentType,
+      size: f.size,
+      dataBase64: f.dataBase64,
+    };
   },
 
   /**
-   * STUB. Direct push to platform-public bucket (bolt has the bytes).
-   * @throws BindingNotInstalled
+   * Not yet implemented. pushPublic mirrors the GraphQL pushToPublic float op;
+   * add a graphql-backed implementation here when an app needs it (the pattern
+   * is reserveUpload above). Throws a clear error until then.
    */
   async pushPublic(input: PushPublicInput): Promise<PushPublicResult> {
-    const ctx = resolveCtx();
-    return stubOrDispatch<PushPublicResult>(
-      BINDING.files_pushPublic,
-      () =>
-        (ctx as unknown as { files?: FilesBinding }).files?.pushPublic,
-      (fn) =>
-        (fn as (i: PushPublicInput) => Promise<PushPublicResult>)(input),
-      {
-        formationId: input.formationId,
-        scopeValue: input.scopeValue,
-        fieldName: input.fieldName,
-        contentType: input.contentType,
-      },
+    void ctxFetch;
+    throw new RainDBBoltError(
+      'ctx.files.pushPublic is not implemented yet. It can be added as a ' +
+        'graphql-backed op (see files.reserveUpload). For public mirroring today, ' +
+        'declare the float field public:true in the formation config so writes ' +
+        'auto-mirror.',
+      { binding: 'ctx.files.pushPublic', input: { formationId: input.formationId } },
     );
   },
 
   /**
-   * STUB. Read float-field metadata (size, contentType, etag, sha256).
-   * @throws BindingNotInstalled
+   * Not yet implemented. readMeta (size/contentType/etag/sha256) can be derived
+   * from a droplet's floatMeta (db.readDroplet) or added as a graphql op when
+   * needed. Throws a clear error until then.
    */
   async readMeta(input: ReadMetaInput): Promise<ReadMetaResult> {
-    const ctx = resolveCtx();
-    return stubOrDispatch<ReadMetaResult>(
-      BINDING.files_readMeta,
-      () =>
-        (ctx as unknown as { files?: FilesBinding }).files?.readMeta,
-      (fn) =>
-        (fn as (i: ReadMetaInput) => Promise<ReadMetaResult>)(input),
-      input,
+    throw new RainDBBoltError(
+      'ctx.files.readMeta is not implemented yet. Read the droplet ' +
+        '(ctx.db.readDroplet) and inspect its floatMeta for size/contentType, or ' +
+        'add a graphql-backed readMeta here when needed.',
+      { binding: 'ctx.files.readMeta', input },
     );
   },
 };

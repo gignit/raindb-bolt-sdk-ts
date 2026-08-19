@@ -114,7 +114,10 @@ test('flows.queryState throws BindingNotInstalled', async () => {
   );
 });
 
-test('files.pushPublic throws BindingNotInstalled', async () => {
+// files.pushPublic / readMeta are not implemented yet -- they throw a clear
+// RainDBBoltError (NOT BindingNotInstalled, since there is no native binding to
+// wait on; they are graphql-backable when an app needs them).
+test('files.pushPublic throws a clear not-implemented RainDBBoltError', async () => {
   setCtx(mockCtx());
   await assert.rejects(
     () =>
@@ -125,7 +128,27 @@ test('files.pushPublic throws BindingNotInstalled', async () => {
         data: 'x',
         contentType: 'text/plain',
       }),
-    (e: unknown) => e instanceof BindingNotInstalled,
+    (e: unknown) =>
+      e instanceof RainDBBoltError && /not implemented/.test((e as Error).message),
+  );
+});
+
+// files.reserveUpload / reserveDownload are now LIVE over the GraphQL route.
+// With no graphql secrets staged, they fail resolving config -- proving they
+// take the graphql path (a real op), NOT a BindingNotInstalled throw.
+test('files.reserveUpload runs the graphql route (not BindingNotInstalled)', async () => {
+  setCtx(mockCtx());
+  await assert.rejects(
+    () =>
+      files.reserveUpload({
+        formationId: 'f',
+        filename: 'a.txt',
+        contentType: 'text/plain',
+        fileSize: 3,
+        author: 'tester',
+      }),
+    (e: unknown) =>
+      e instanceof RainDBBoltError && !(e instanceof BindingNotInstalled),
   );
 });
 
