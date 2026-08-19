@@ -239,6 +239,49 @@ test('iam.mintWireToken forwards opts', async () => {
   assert.equal(out, 'rgr1.signed');
 });
 
+test('iam.mintActivitySubscription derives chain-head keys + mints', async () => {
+  let capturedResources: Array<{ id: string }> = [];
+  setCtx(
+    mockCtx({
+      iam: {
+        mintWireToken: async (opts: { resources: Array<{ id: string }> }) => {
+          capturedResources = opts.resources;
+          return 'rgr1.activity';
+        },
+      },
+    }),
+  );
+  const sub = await iam.mintActivitySubscription({
+    subject: 'u-1',
+    formationId: 'ref-entries',
+    indexName: 'by-update',
+    scopeValues: ['e-1', 'e-2'],
+    ttlSec: 1800,
+  });
+  assert.equal(sub.token, 'rgr1.activity');
+  // tenant-relative chain-head keys, one per scope
+  assert.deepEqual(sub.keys, [
+    'indexes/ref-entries/by-update.desc/e-1/latest.json',
+    'indexes/ref-entries/by-update.desc/e-2/latest.json',
+  ]);
+  assert.equal(capturedResources.length, 2);
+  assert.equal(capturedResources[0]?.id, 'indexes/ref-entries/by-update.desc/e-1/latest.json');
+});
+
+test('iam.mintActivitySubscription rejects an empty scopeValues list', async () => {
+  setCtx(mockCtx({ iam: { mintWireToken: async () => 'x' } }));
+  await assert.rejects(
+    () =>
+      iam.mintActivitySubscription({
+        subject: 'u-1',
+        formationId: 'f',
+        indexName: 'by-update',
+        scopeValues: [],
+      }),
+    (e: unknown) => e instanceof RainDBBoltError && /scopeValue/.test((e as Error).message),
+  );
+});
+
 // ----------------------------- response (streaming) -----------------------------
 
 test('response.write throws clearly when streaming not enabled', async () => {
