@@ -38,7 +38,7 @@ export { cookies } from './bindings/cookies.js';
 export { iam } from './bindings/iam.js';
 // --- LIVE since v0.4.0 (substrate commit 7bf58b6 -- unified IAM gate) ---
 export { auth } from './bindings/auth.js';
-export { response } from './bindings/response.js';
+export { response, startSSE, sseFrame } from './bindings/response.js';
 
 // --- LIVE since v0.3.0 (substrate Wave 2.5 commit f934956) ---
 export { schedule } from './bindings/schedule.js';
@@ -95,6 +95,8 @@ export type {
   MutateInput,
   MutateAndReadInput,
   WriteTokenDbInput,
+  VersionHistoryInput,
+  Revision,
 } from './bindings/db.js';
 
 export type { LogBinding } from './bindings/log.js';
@@ -110,7 +112,7 @@ export type {
   WireTokenResource,
 } from './bindings/iam.js';
 export type { AuthBinding } from './bindings/auth.js';
-export type { ResponseBinding } from './bindings/response.js';
+export type { ResponseBinding, SSEStream, SSEFrame } from './bindings/response.js';
 export type {
   TokenBinding,
   WriteTokenInput,

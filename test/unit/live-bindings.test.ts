@@ -16,6 +16,7 @@ import {
   cookies,
   iam,
   response,
+  startSSE,
   RainDBBoltError,
 } from '../../src/index.js';
 import { _resetCtxForTest } from '../../src/runtime/ctx-resolver.js';
@@ -292,4 +293,40 @@ test('response.setHeader and beginStream forward correctly', async () => {
     'hdr:content-type=text/event-stream',
     'begin:200',
   ]);
+});
+
+// ----------------------------- startSSE helper -----------------------------
+
+test('startSSE buffers frames + finalize returns the event-stream body (non-streaming route)', async () => {
+  const ctx = mockCtx(); // no ctx.response -> buffered path
+  setCtx(ctx);
+  const sse = await startSSE(ctx);
+  sse.send('thinking', { i: 1 });
+  sse.send('final', { content: 'hi' });
+  const res = sse.finalize();
+  assert.equal(res.status, 200);
+  assert.equal(res.headers?.['content-type'], 'text/event-stream');
+  assert.match(res.body as string, /event: thinking\ndata: {"i":1}\n\n/);
+  assert.match(res.body as string, /event: final\ndata: {"content":"hi"}\n\n/);
+});
+
+test('startSSE writes live + finalize returns empty body (streaming route)', async () => {
+  const wire: string[] = [];
+  const ctx = mockCtx({
+    response: {
+      setHeader: () => {},
+      beginStream: () => {},
+      write: (c: string | Uint8Array) => {
+        wire.push(typeof c === 'string' ? c : new TextDecoder().decode(c));
+        return 1;
+      },
+    },
+  });
+  setCtx(ctx);
+  const sse = await startSSE(ctx);
+  sse.send('tick', { n: 1 });
+  const res = sse.finalize();
+  // live path: bytes went to the wire, finalize body is empty
+  assert.equal(res.body, '');
+  assert.equal(wire.join(''), 'event: tick\ndata: {"n":1}\n\n');
 });

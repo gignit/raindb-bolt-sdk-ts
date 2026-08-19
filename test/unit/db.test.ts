@@ -269,6 +269,40 @@ test('db.listDroplets forwards args and returns array', async () => {
   assert.equal(out.droplets[0]?.dropletId, 'd-1');
 });
 
+// ----------------------------- versionHistory -----------------------------
+
+test('db.versionHistory returns revisions newest-first (built on listDroplets)', async () => {
+  let listPrefix: string | undefined;
+  setCtx(
+    mockCtx({
+      db: {
+        readLatest: async () => null,
+        readDroplet: async () => null,
+        writeDroplet: async () => ({ dropletId: 'x' }),
+        // Two revisions of one entity, returned oldest-first by the substrate;
+        // versionHistory must sort them newest-first by ts.
+        listDroplets: async (formationId: string, opts: CursorPaginationOpts) => {
+          listPrefix = opts.prefix;
+          return {
+            droplets: [
+              { dropletId: 'd-old', formationId, schemaVersion: 1, ts: 1000, author: 'a', payload: { v: 1 } },
+              { dropletId: 'd-new', formationId, schemaVersion: 1, ts: 2000, author: 'a', payload: { v: 2 } },
+            ],
+            hasMore: false,
+          };
+        },
+      },
+    }),
+  );
+
+  const history = await db.versionHistory({ formationId: 'notes', scopeValue: 'e-1' });
+  assert.equal(history.length, 2);
+  assert.equal(history[0]?.dropletId, 'd-new'); // newest first
+  assert.equal(history[1]?.dropletId, 'd-old');
+  assert.deepEqual(history[0]?.payload, { v: 2 });
+  assert.equal(listPrefix, 'e-1/'); // walked the entity prefix
+});
+
 // ----------------------------- ambient setup -----------------------------
 
 test('db.readLatest throws when setCtx not called', async () => {

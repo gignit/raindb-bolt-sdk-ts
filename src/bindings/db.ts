@@ -65,6 +65,26 @@ export interface ReadDropletInput {
   dropletId: string;
 }
 
+export interface VersionHistoryInput {
+  formationId: string;
+  /** The entity's scope value (its stable id). */
+  scopeValue: string;
+  /** Max revisions to return (walks pages up to this; default 200). */
+  limit?: number;
+}
+
+/** One revision in an entity's version history (from its droplet chain). */
+export interface Revision {
+  /** The revision's dropletId. Read its exact bytes with db.readDroplet. */
+  dropletId: string;
+  /** Write time, Unix milliseconds. */
+  ts: number;
+  /** The entity payload AS IT WAS at this revision. */
+  payload: Record<string, unknown> | null;
+  /** Per-float metadata at this revision (present when the entity has floats). */
+  floatMeta?: Record<string, unknown>[];
+}
+
 export interface WriteDropletInput {
   formationId: string;
   payload: Record<string, unknown>;
@@ -683,6 +703,62 @@ export const db = {
         input,
       });
     }
+  },
+
+  /**
+   * The VERSION HISTORY of one entity, newest-first: every revision droplet in
+   * the entity's chain, each with its dropletId, write time, and the payload as
+   * it was at that revision.
+   *
+   * This is RainDB's headline capability as ONE call: because every write is an
+   * immutable droplet, the chain of droplets under an entity IS its full history
+   * / audit trail / undo -- no versions table, no schema, no extra writes. Built
+   * on the LIVE {@link listDroplets} (walks the entity prefix, paginating up to
+   * `limit`), so it needs only the `list` capability on the formation.
+   *
+   * To read one revision's exact bytes, pass its `dropletId` to
+   * {@link readDroplet}. To restore an old revision, write its payload back with
+   * {@link writeDroplet} (the restore is itself a new revision -- history only
+   * grows).
+   *
+   * @requires capability: `list` on the formation
+   * @returns revisions sorted newest-first (by write time)
+   *
+   * @example
+   * ```ts
+   * const history = await db.versionHistory({ formationId: 'notes', scopeValue: id });
+   * // history[0] is the current revision; history[1] the one before; ...
+   * ```
+   */
+  async versionHistory(input: VersionHistoryInput): Promise<Revision[]> {
+    const limit = input.limit ?? 200;
+    const out: Revision[] = [];
+    let cursor: string | undefined;
+    // Walk pages of the entity's droplet prefix until we have `limit` or run out.
+    for (;;) {
+      const page: DropletsPage = await this.listDroplets({
+        formationId: input.formationId,
+        opts: {
+          prefix: `${input.scopeValue}/`,
+          first: Math.min(limit - out.length, 200),
+          ...(cursor ? { after: cursor } : {}),
+        },
+      });
+      for (const d of page.droplets) {
+        out.push({
+          dropletId: d.dropletId,
+          ts: d.ts,
+          payload: d.payload,
+          ...(d.floatMeta ? { floatMeta: d.floatMeta } : {}),
+        });
+      }
+      if (!page.hasMore || out.length >= limit) break;
+      cursor = page.nextCursor ?? undefined;
+      if (!cursor) break;
+    }
+    // Newest-first: droplet ids are time-ordered (UUIDv7) and ts is the write
+    // time; sort descending by ts so history[0] is the current revision.
+    return out.sort((a, b) => b.ts - a.ts).slice(0, limit);
   },
 
   // ===================================================================
