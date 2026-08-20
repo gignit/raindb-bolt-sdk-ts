@@ -64,6 +64,12 @@ export { catalog } from './bindings/catalog.js';
 export { formations } from './bindings/formations.js';
 export { flows } from './bindings/flows.js';
 
+// Agent bridge: build an @raindb/agent ToolContext host from a bolt ctx, so a
+// bolt can run the LLM agent loop (runAgent) with RainDB tools over the bolt's
+// own transport (substrate graphql -> native bindings, LLM -> ctx.fetch).
+export { makeBoltNativeHost } from './agent-bridge/host.js';
+export type { AgentHost } from './agent-bridge/host.js';
+
 // =====================================================================
 // Per-binding interface types (for BoltContext consumers, advanced
 // type composition, and the agent-bridge).
