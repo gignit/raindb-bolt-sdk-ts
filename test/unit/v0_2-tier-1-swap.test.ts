@@ -600,3 +600,142 @@ test('db.listSince throws BindingNotInstalled on pre-af5e9eb runtime', async () 
     },
   );
 });
+
+// --------------------- sql.queryEntityRowsFresh (row-list freshness merge) ---
+
+test('queryEntityRowsFresh merges the not-yet-pooled tail (newest wins, deduped by scopeKey)', async () => {
+  setCtx(
+    mockCtx({
+      sql: {
+        // SQL snapshot is BEHIND: it has e1 (old title) but not e2, and its e1
+        // is a stale revision.
+        query: async () => ({
+          columns: ['entryId', 'title'],
+          rows: [{ entryId: 'e1', title: 'e1-OLD' }],
+          rowCount: 1,
+          durationMs: 1,
+          truncated: false,
+          latest: [
+            {
+              formationId: 'ff-journal',
+              snapshotDropletId: 'd-snap',
+              snapshotKey: 'k',
+              currentDropletId: 'd-cur',
+              currentKey: 'k2',
+              indexPrefix: 'indexes/ff-journal/by-update/',
+              freshnessStatus: 'BEHIND',
+            },
+          ],
+        }),
+      },
+      db: {
+        readLatest: async () => null,
+        readDroplet: async () => null,
+        writeDroplet: async () => ({ dropletId: 'x' }),
+        listDroplets: async () => ({ droplets: [], hasMore: false }),
+        // The tail after the snapshot cursor: a newer e1 revision + a brand-new e2.
+        // listSince is asc (oldest-first).
+        listSince: async (_f: string, _cursor: string) => ({
+          droplets: [
+            { dropletId: 'd2', formationId: 'ff-journal', schemaVersion: 1, ts: 2, author: 'a', payload: { entryId: 'e1', title: 'e1-NEW' } },
+            { dropletId: 'd3', formationId: 'ff-journal', schemaVersion: 1, ts: 3, author: 'a', payload: { entryId: 'e2', title: 'e2' } },
+          ],
+          hasMore: false,
+        }),
+      },
+    }),
+  );
+
+  const r = await sql.queryEntityRowsFresh({
+    sql: 'SELECT entryId, title FROM entity."ff-journal"',
+    formationId: 'ff-journal',
+    scopeKey: 'entryId',
+  });
+  // e2 (newest late) leads, then the FRESH e1 (late revision supersedes the stale
+  // snapshot row), and the stale snapshot e1-OLD is gone.
+  assert.deepEqual(r.rows, [
+    { entryId: 'e2', title: 'e2' },
+    { entryId: 'e1', title: 'e1-NEW' },
+  ]);
+});
+
+test('queryEntityRowsFresh is a passthrough when the snapshot is CURRENT (no harvest)', async () => {
+  let listSinceCalled = false;
+  setCtx(
+    mockCtx({
+      sql: {
+        query: async () => ({
+          columns: ['entryId'],
+          rows: [{ entryId: 'e1' }],
+          rowCount: 1,
+          durationMs: 1,
+          truncated: false,
+          latest: [
+            {
+              formationId: 'ff-journal',
+              snapshotDropletId: 'd',
+              snapshotKey: 'k',
+              currentDropletId: 'd',
+              currentKey: 'k',
+              indexPrefix: 'indexes/ff-journal/by-update/',
+              freshnessStatus: 'CURRENT',
+            },
+          ],
+        }),
+      },
+      db: {
+        readLatest: async () => null,
+        readDroplet: async () => null,
+        writeDroplet: async () => ({ dropletId: 'x' }),
+        listDroplets: async () => ({ droplets: [], hasMore: false }),
+        listSince: async () => {
+          listSinceCalled = true;
+          return { droplets: [], hasMore: false };
+        },
+      },
+    }),
+  );
+  const r = await sql.queryEntityRowsFresh({ sql: 'SELECT entryId FROM entity."ff-journal"', formationId: 'ff-journal' });
+  assert.equal(listSinceCalled, false); // CURRENT -> no harvest
+  assert.deepEqual(r.rows, [{ entryId: 'e1' }]);
+});
+
+test('queryEntityRowsFresh FAILS LOUD on harvest error (never returns stale)', async () => {
+  setCtx(
+    mockCtx({
+      sql: {
+        query: async () => ({
+          columns: ['entryId'],
+          rows: [{ entryId: 'e1' }],
+          rowCount: 1,
+          durationMs: 1,
+          truncated: false,
+          latest: [
+            {
+              formationId: 'ff-journal',
+              snapshotDropletId: 'd',
+              snapshotKey: 'k',
+              currentDropletId: 'd2',
+              currentKey: 'k2',
+              indexPrefix: 'indexes/ff-journal/by-update/',
+              freshnessStatus: 'BEHIND',
+            },
+          ],
+        }),
+      },
+      db: {
+        readLatest: async () => null,
+        readDroplet: async () => null,
+        writeDroplet: async () => ({ dropletId: 'x' }),
+        listDroplets: async () => ({ droplets: [], hasMore: false }),
+        listSince: async () => {
+          throw new Error('S3 unavailable');
+        },
+      },
+    }),
+  );
+  await assert.rejects(
+    () => sql.queryEntityRowsFresh({ sql: 'SELECT entryId FROM entity."ff-journal"', formationId: 'ff-journal' }),
+    (e: unknown) => e instanceof RainDBBoltError && /harvest failed/.test((e as Error).message),
+  );
+});

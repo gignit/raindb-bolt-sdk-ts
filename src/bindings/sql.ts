@@ -41,8 +41,9 @@
 
 import { resolveCtx } from '../runtime/ctx-resolver.js';
 import { translateBindingError } from '../errors/from-binding.js';
-import { BindingNotInstalled } from '../errors/classes.js';
+import { BindingNotInstalled, RainDBBoltError } from '../errors/classes.js';
 import { BINDING } from '../internal/constants.js';
+import { db } from './db.js';
 
 /**
  * Input shape for {@link sql.query}. The wrapper repacks this
@@ -321,5 +322,120 @@ export const sql = {
         input: { sql: input.sql.slice(0, 80), withFreshness: input.withFreshness },
       });
     }
+  },
+
+  /**
+   * Read-your-writes analytical ROW LIST: run an ENTITY-ROW SQL query, then merge
+   * the not-yet-pooled tail so the result includes writes the columnar snapshot
+   * has not rolled up yet. This is the one-call form of the freshness-merge every
+   * analytical bolt otherwise hand-rolls (see the production shape in crexp's
+   * server/index.js::runSQLFresh).
+   *
+   * How it works: run {@link query} with `withFreshness: true`; for each formation
+   * bookmark that {@link needsHarvest}, poll the by-update tail after the snapshot
+   * cursor via {@link db.listSince} (full payloads), project each late droplet onto
+   * the query's columns, and merge NEWEST-FIRST, deduped by `scopeKey` (a late row
+   * replaces a snapshot row for the same entity; late rows lead).
+   *
+   * STRICTLY FOR ENTITY-ROW QUERIES -- `SELECT <cols> FROM entity."<f>" ...` where
+   * each row IS an entity. It is NOT valid for aggregates: you cannot merge a raw
+   * late droplet into a GROUP BY / window / percentile / regression result (adding
+   * a row does not re-aggregate). For an analytical CHART, run {@link query} over
+   * the pooled data and show a freshness/"updating" indicator from the bookmark
+   * instead of trying to freshen the aggregate.
+   *
+   * FAIL-LOUD: if the tail harvest errors, this THROWS -- it never silently returns
+   * the stale snapshot (a method named `*Fresh` must not hand back stale data).
+   *
+   * @param input.scopeKey the entity-identity column both the SQL rows and the late
+   *   droplet payloads carry (e.g. `entryId`); used to dedupe the merge. Defaults
+   *   to the first column when omitted.
+   * @throws RainDBBoltError when the tail harvest fails
+   * @requires capability: `sql-read` + `list` on the formation
+   *
+   * @example
+   * ```ts
+   * const r = await sql.queryEntityRowsFresh({
+   *   sql: 'SELECT entryId, title, status, updatedAt FROM entity."ff-journal" ORDER BY updatedAt DESC LIMIT 50',
+   *   formationId: 'ff-journal',
+   *   scopeKey: 'entryId',
+   * });
+   * // r.rows includes entries written since the last pool -- read-your-writes.
+   * ```
+   */
+  async queryEntityRowsFresh(
+    input: SqlQueryInput & { scopeKey?: string },
+  ): Promise<SqlResult> {
+    const base = await this.query({ ...input, withFreshness: true });
+    const bookmarks = base.latest ?? [];
+    const behind = bookmarks.filter((bm) => needsHarvest(bm));
+    if (behind.length === 0) return base;
+
+    const cols = base.columns.length
+      ? base.columns
+      : Object.keys(base.rows[0] ?? {});
+    const key = input.scopeKey ?? cols[0];
+    if (!key) return base; // no columns to key on -- nothing to merge
+
+    // Harvest the not-yet-pooled tail for each behind formation (fail-loud).
+    const late: Array<Record<string, unknown>> = [];
+    for (const bm of behind) {
+      let cursor = bm.snapshotDropletId;
+      // Walk pages from the snapshot cursor forward until caught up.
+      for (;;) {
+        let page;
+        try {
+          page = await db.listSince({
+            formationId: bm.formationId,
+            sinceCursor: cursor,
+            opts: { first: 200 },
+          });
+        } catch (err) {
+          throw new RainDBBoltError(
+            `sql.queryEntityRowsFresh: tail harvest failed for ${bm.formationId} ` +
+              `after ${cursor}: ${err instanceof Error ? err.message : String(err)}`,
+            { binding: 'ctx.sql.queryEntityRowsFresh', input: { formationId: bm.formationId } },
+          );
+        }
+        // listSince returns full droplets; the entity row is its payload.
+        for (const d of page.droplets) {
+          if (d.payload) late.push(d.payload);
+        }
+        if (!page.nextCursor || page.droplets.length === 0) break;
+        cursor = page.nextCursor;
+      }
+    }
+    if (late.length === 0) return base;
+
+    // Project a late droplet onto the query's columns (null-fill missing).
+    const project = (obj: Record<string, unknown>): Record<string, unknown> => {
+      const r: Record<string, unknown> = {};
+      for (const c of cols) r[c] = c in obj ? obj[c] : null;
+      return r;
+    };
+
+    // Merge: late rows first (newest), then snapshot rows; first occurrence of a
+    // scope key wins (a late row supersedes the stale snapshot row).
+    const byKey = new Map<unknown, Record<string, unknown>>();
+    const order: unknown[] = [];
+    const add = (row: Record<string, unknown>): void => {
+      const k = row[key];
+      if (!byKey.has(k)) order.push(k);
+      else return; // first (late) wins
+      byKey.set(k, row);
+    };
+    // listSince is asc (oldest-first); reverse so newest late rows lead.
+    for (const d of late.map(project).reverse()) add(d);
+    for (const row of base.rows) add(row);
+
+    const merged = order.map((k) => byKey.get(k)!);
+    return {
+      columns: cols,
+      rows: merged,
+      rowCount: merged.length,
+      durationMs: base.durationMs,
+      truncated: base.truncated,
+      ...(base.latest ? { latest: base.latest } : {}),
+    };
   },
 };
