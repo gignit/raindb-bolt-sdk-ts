@@ -272,6 +272,7 @@ test('db.listDroplets forwards args and returns array', async () => {
 // ----------------------------- versionHistory -----------------------------
 
 test('db.versionHistory returns revisions newest-first (built on listDroplets)', async () => {
+  let listScopeValue: string | undefined;
   let listPrefix: string | undefined;
   setCtx(
     mockCtx({
@@ -282,6 +283,7 @@ test('db.versionHistory returns revisions newest-first (built on listDroplets)',
         // Two revisions of one entity, returned oldest-first by the substrate;
         // versionHistory must sort them newest-first by ts.
         listDroplets: async (formationId: string, opts: CursorPaginationOpts) => {
+          listScopeValue = opts.scopeValue;
           listPrefix = opts.prefix;
           return {
             droplets: [
@@ -300,7 +302,8 @@ test('db.versionHistory returns revisions newest-first (built on listDroplets)',
   assert.equal(history[0]?.dropletId, 'd-new'); // newest first
   assert.equal(history[1]?.dropletId, 'd-old');
   assert.deepEqual(history[0]?.payload, { v: 2 });
-  assert.equal(listPrefix, 'e-1/'); // walked the entity prefix
+  assert.equal(listScopeValue, 'e-1'); // host resolves the formation's physical path segment
+  assert.equal(listPrefix, undefined); // semantic history must not guess a raw storage prefix
 });
 
 // ----------------------------- ambient setup -----------------------------

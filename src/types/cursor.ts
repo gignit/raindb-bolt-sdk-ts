@@ -25,6 +25,11 @@ export interface CursorPaginationOpts {
   before?: string;
   /** Optional prefix narrowing within the index. */
   prefix?: string;
+  /**
+   * Semantic entity identity for listDroplets. The host resolves the
+   * formation's physical path encoding. Mutually exclusive with prefix.
+   */
+  scopeValue?: string;
 }
 
 /**

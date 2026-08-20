@@ -93,8 +93,10 @@ export interface WriteDropletInput {
 export interface ListDropletsInput {
   formationId: string;
   /**
-   * Relay-style asc pagination (first/after) + optional prefix
-   * narrowing within the entity namespace. listDroplets now returns a
+     * Relay-style asc pagination (first/after) plus either semantic
+     * `scopeValue` or raw physical `prefix` narrowing within the entity
+     * namespace. The two narrowing fields are mutually exclusive.
+     * listDroplets now returns a
    * {@link DropletsPage} so a bolt can walk a formation larger than one
    * page and detect truncation; previously it returned a bare array and
    * dropped the cursor, so only the first page was ever visible
@@ -658,7 +660,8 @@ export const db = {
   },
 
   /**
-   * Enumerate droplets under a formation prefix. Returns full droplet
+   * Enumerate droplets under a formation, optionally narrowed by semantic
+   * entity scope or a raw intra-entity prefix. Returns full droplet
    * shapes; for keys-only walks use {@link listKeys} (STUBBED).
    *
    * LIVE binding.
@@ -734,12 +737,12 @@ export const db = {
     const limit = input.limit ?? 200;
     const out: Revision[] = [];
     let cursor: string | undefined;
-    // Walk pages of the entity's droplet prefix until we have `limit` or run out.
+    // Walk pages of the entity's semantic scope until we have `limit` or run out.
     for (;;) {
       const page: DropletsPage = await this.listDroplets({
         formationId: input.formationId,
         opts: {
-          prefix: `${input.scopeValue}/`,
+          scopeValue: input.scopeValue,
           first: Math.min(limit - out.length, 200),
           ...(cursor ? { after: cursor } : {}),
         },
