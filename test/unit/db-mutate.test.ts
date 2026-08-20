@@ -229,6 +229,24 @@ test('db.writeToken forwards (formationId, payload) and returns envelope', async
   assert.equal(env.dropletId, 'tok-018f');
 });
 
+test('db.writeToken surfaces the autoGen scopeValue from the envelope', async () => {
+  // A token formation with autoGenId mints its scopeKey; the substrate returns
+  // it as scopeValue. The wrapper must pass the WHOLE envelope through (not just
+  // dropletId) so a caller can read e.g. a session token's minted sessionId.
+  setCtx(
+    mockCtx({
+      db: {
+        ...dbBase,
+        writeToken: async () => ({ dropletId: 'tok-1', scopeValue: 'sess-abc', pointerETag: 'etag-9' }),
+      },
+    }),
+  );
+  const env = await db.writeToken({ formationId: 'ref-session', payload: { userId: 'u1' } });
+  assert.equal(env.dropletId, 'tok-1');
+  assert.equal(env.scopeValue, 'sess-abc');
+  assert.equal(env.pointerETag, 'etag-9');
+});
+
 test('db.writeToken throws when substrate returns wrong shape', async () => {
   setCtx(
     mockCtx({

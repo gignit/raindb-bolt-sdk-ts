@@ -1359,14 +1359,20 @@ export const db = {
       );
     }
     try {
-      const out = await ctx.db.writeToken(input.formationId, input.payload);
-      const id = (out as { dropletId?: unknown }).dropletId;
+      const out = (await ctx.db.writeToken(input.formationId, input.payload)) as
+        | Partial<DropletEnvelope>
+        | undefined;
+      const id = out?.dropletId;
       if (typeof id !== 'string') {
         throw new Error(
           'ctx.db.writeToken: substrate did not return dropletId string',
         );
       }
-      return { dropletId: id };
+      // Return the FULL envelope (not just dropletId): a token formation with
+      // autoGenId mints its scopeKey and the substrate returns it as
+      // `scopeValue` -- the caller needs it (e.g. a session token's sessionId).
+      // Mirrors db.writeDroplet, which already surfaces the whole envelope.
+      return { ...out, dropletId: id };
     } catch (err) {
       translateBindingError(err, {
         binding: BINDING.db_writeToken,
