@@ -58,6 +58,18 @@ test('token.claim throws BindingNotInstalled when ctx.token is missing', async (
   );
 });
 
+// token.delete is now LIVE over the graphql route (deleteToken) -- it must NOT
+// throw BindingNotInstalled; with no graphql secrets staged it fails resolving
+// the graphql config, proving it took the real route.
+test('token.delete runs the graphql route (not BindingNotInstalled)', async () => {
+  setCtx(mockCtx());
+  await assert.rejects(
+    () => token.delete('f', 's'),
+    (e: unknown) =>
+      e instanceof RainDBBoltError && !(e instanceof BindingNotInstalled),
+  );
+});
+
 test('stats.increment throws BindingNotInstalled', async () => {
   setCtx(mockCtx());
   await assert.rejects(

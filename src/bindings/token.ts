@@ -12,7 +12,15 @@
 import { resolveCtx } from '../runtime/ctx-resolver.js';
 import { stubOrDispatch } from '../runtime/binding-not-installed.js';
 import { BINDING } from '../internal/constants.js';
+import { boltGraphQL } from '../runtime/graphql.js';
 import type { Token, WriteTokenOptions } from '../types/token.js';
+
+// deleteToken is a LOW-FREQUENCY op (a token is deleted once, on publish/cleanup),
+// served over the GraphQL API via ctx.fetch -- the same intended route as files.*.
+const DELETE_TOKEN = `
+  mutation($in: DeleteTokenInput!) {
+    deleteToken(input: $in) { formationId scopeValue success }
+  }`;
 
 export interface WriteTokenInput {
   formationId: string;
@@ -151,23 +159,29 @@ export const token = {
   },
 
   /**
-   * STUB. Delete the token at a scope. No-op when no claim exists.
+   * Delete the token at a scope (e.g. discard a draft, or delete it on publish).
+   * Idempotent: a no-op when no token exists at that scope. Removes the token
+   * object from storage; the draft-as-token pattern uses this to make an
+   * in-progress draft VANISH once the durable entity is published.
    *
-   * @throws BindingNotInstalled
+   * LIVE over the GraphQL route (deleteToken) -- a low-frequency op, so it rides
+   * ctx.fetch + GraphQL (requires the RAINDB_GRAPHQL_ENDPOINT + RAINDB_GRAPHQL_KEY
+   * secrets; see runtime/graphql.ts). Prefers a native ctx.token.delete binding
+   * if a future runtime installs one.
+   *
+   * @returns true when the delete succeeded (or the token was already absent)
    */
-  async delete(formationId: string, scopeValue: string): Promise<void> {
-    const ctx = resolveCtx();
-    return stubOrDispatch<void>(
-      BINDING.token_delete,
-      () =>
-        (ctx as unknown as { token?: TokenBinding }).token?.delete,
-      (fn) =>
-        (fn as (i: DeleteTokenInput) => Promise<void>)({
-          formationId,
-          scopeValue,
-        }),
-      { formationId, scopeValue },
+  async delete(formationId: string, scopeValue: string): Promise<boolean> {
+    const native = (resolveCtx() as unknown as { token?: TokenBinding }).token?.delete;
+    if (typeof native === 'function') {
+      await native({ formationId, scopeValue });
+      return true;
+    }
+    const data = await boltGraphQL<{ deleteToken: { success: boolean } }>(
+      DELETE_TOKEN,
+      { in: { formationId, scopeValue } },
     );
+    return data.deleteToken.success;
   },
 
   /**
