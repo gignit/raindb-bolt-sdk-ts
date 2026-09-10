@@ -46,6 +46,24 @@ import { BINDING } from '../internal/constants.js';
 import { db } from './db.js';
 
 /**
+ * Periscope query plan strategy for a single SQL query. Selects HOW the
+ * answer-preserving read set is computed from the pinned snapshot:
+ *
+ * - `'range'` (the substrate default): manifest-summary reduction -- drops
+ *   absorbed lower-tier manifests using the snapshot summaries alone.
+ * - `'scan'`: native Iceberg file-level planning.
+ *
+ * Both strategies return IDENTICAL rows; they differ only in how the read set
+ * is planned. Omit to use the formation's configured default
+ * (`views.queryDefaults.planStrategy`, itself defaulting to `range`). The
+ * substrate rejects any other value (empty string, `'standard'`, `'Scan'`,
+ * `' scan'`) with a `bad_request`. LIVE on both engines since raindb-prime
+ * commit 5fdd75fc (per-query override) and 507666a0 (range/scan selected by
+ * planStrategy alone).
+ */
+export type PlanStrategy = 'range' | 'scan';
+
+/**
  * Input shape for {@link sql.query}. The wrapper repacks this
  * into the goja binding's positional convention `(sql, opts)`.
  */
@@ -65,6 +83,14 @@ export interface SqlQueryInput {
    * config used by the api server).
    */
   timeoutMs?: number;
+  /**
+   * Per-query periscope plan strategy override ({@link PlanStrategy}). Omit to
+   * use the formation's configured default. Forwarded verbatim to the host,
+   * which validates it (goja `extractSQLQueryOptions` / pod-channel
+   * `handleSQLQuery` -> `runtime.SQLQueryOptions.PlanStrategy`); an invalid
+   * value is rejected substrate-side, not silently dropped.
+   */
+  planStrategy?: PlanStrategy;
   /**
    * Ask the substrate to populate the result's `latest[]` freshness bookmark
    * (one {@link SqlFreshnessRow} per formation the query touches). LIVE: the
@@ -225,6 +251,7 @@ export interface SqlBinding {
       formationId?: string;
       timeoutMs?: number;
       withFreshness?: boolean;
+      planStrategy?: PlanStrategy;
     },
   ): Promise<SqlResult>;
 }
@@ -308,11 +335,19 @@ export const sql = {
     }
     // Repack the named-args input into the goja binding's
     // positional convention. Only forward defined fields so the
-    // substrate sees an absent rather than zero-valued option.
-    const opts: { formationId?: string; timeoutMs?: number; withFreshness?: boolean } = {};
+    // substrate sees an absent rather than zero-valued option
+    // (an omitted planStrategy => formation default; a defined one
+    // is validated host-side, never dropped or defaulted in JS).
+    const opts: {
+      formationId?: string;
+      timeoutMs?: number;
+      withFreshness?: boolean;
+      planStrategy?: PlanStrategy;
+    } = {};
     if (input.formationId !== undefined) opts.formationId = input.formationId;
     if (input.timeoutMs !== undefined) opts.timeoutMs = input.timeoutMs;
     if (input.withFreshness !== undefined) opts.withFreshness = input.withFreshness;
+    if (input.planStrategy !== undefined) opts.planStrategy = input.planStrategy;
     try {
       const out = await ctx.sql.query(input.sql, opts);
       return out as SqlResult;
