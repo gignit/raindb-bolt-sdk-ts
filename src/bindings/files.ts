@@ -60,12 +60,17 @@ export interface ReserveDownloadInput {
 }
 
 export interface ReserveDownloadResult {
-  /** A data: URL of the bytes (directly usable) -- the graphql route returns bytes, not a presigned GET. */
+  /**
+   * A `data:` URL of the fully-buffered bytes (directly usable). The GraphQL
+   * route (`readFloat`) returns the bytes inline, NOT a presigned GET URL, so
+   * this URL embeds the content and does NOT expire -- there is no server-side
+   * artifact with a TTL. For large payloads read the bytes via `dataBase64`
+   * rather than the data URL.
+   */
   downloadUrl: string;
-  /** ISO 8601 expiry (advisory for the data URL). */
-  expiresAt: string;
   contentType: string;
   size: number;
+  /** The float's bytes, base64-encoded. This is the authoritative payload. */
   dataBase64: string;
 }
 
@@ -196,11 +201,13 @@ export const files = {
    * `revisions: true` float retains every version, any historical dropletId
    * resolves that version's bytes -- the per-version-download capability.
    *
-   * LIVE over the GraphQL route (readFloat). Returns the bytes as base64 (the
-   * bolt decodes/streams them); this is distinct from a presigned-GET URL,
-   * which is not a GraphQL operation.
+   * LIVE over the GraphQL route (readFloat). Returns the bytes FULLY BUFFERED
+   * as base64 plus a self-contained `data:` URL; it is NOT a presigned GET and
+   * NOT an expiring server artifact (there is nothing with a TTL to expire).
+   * Suitable for small results; it cannot carry an unbounded lossless dataset
+   * (that is the scientific-export follow-up, not this helper).
    *
-   * @param input.fieldName carries the dropletId to read (the revision to fetch)
+   * @param input.dropletId the revision to fetch (any retained version)
    */
   async reserveDownload(input: ReserveDownloadInput): Promise<ReserveDownloadResult> {
     const native = nativeFiles()?.reserveDownload;
@@ -218,11 +225,11 @@ export const files = {
       );
     }
     // The GraphQL route returns bytes, not a presigned URL -- expose both a
-    // data: URL (usable directly) and the raw base64 + metadata.
+    // self-contained data: URL (usable directly, never expires) and the raw
+    // base64 + metadata. No fabricated expiresAt: nothing here has a TTL.
     const f = data.readFloat;
     return {
       downloadUrl: `data:${f.contentType};base64,${f.dataBase64}`,
-      expiresAt: new Date(Date.now() + 3600_000).toISOString(),
       contentType: f.contentType,
       size: f.size,
       dataBase64: f.dataBase64,

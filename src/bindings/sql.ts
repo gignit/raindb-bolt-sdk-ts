@@ -379,6 +379,23 @@ export const sql = {
    * the pooled data and show a freshness/"updating" indicator from the bookmark
    * instead of trying to freshen the aggregate.
    *
+   * LIMITATION -- read before relying on this. The merge does NOT re-apply the
+   * query's WHERE / ORDER BY / LIMIT over the combined (snapshot + late-tail) set:
+   * late rows are projected onto the columns, deduped by `scopeKey`, and led in
+   * newest-first, then the snapshot rows follow. So:
+   *   - a late row that NO LONGER matches the WHERE can appear (the predicate is
+   *     not re-evaluated on the tail);
+   *   - the SQL ORDER BY is NOT re-imposed across the late rows (they lead by
+   *     write order, not the query's sort);
+   *   - a LIMIT is NOT re-applied, so the merged result can exceed it.
+   * Correctly reconciling predicate/sort/limit over an eventually-consistent
+   * snapshot is a PLATFORM concern (the bounded `CURRENT_BOUNDED` mode in
+   * raindb-prime docs/followup/bounded-current-row-query.md, still OPEN); this
+   * helper is a best-effort entity-set freshen, NOT that operation, and it does
+   * NOT parse SQL. Use it for an unordered/unfiltered "did my writes land" set;
+   * for ordered/filtered/limited current lists, sort+filter+slice the result
+   * yourself over stable columns, or await the platform bounded-current mode.
+   *
    * FAIL-LOUD: if the tail harvest errors, this THROWS -- it never silently returns
    * the stale snapshot (a method named `*Fresh` must not hand back stale data).
    *
@@ -390,12 +407,17 @@ export const sql = {
    *
    * @example
    * ```ts
+   * // Unordered read-your-writes entity SET (no reliance on ORDER BY/LIMIT):
    * const r = await sql.queryEntityRowsFresh({
-   *   sql: 'SELECT entryId, title, status, updatedAt FROM entity."ff-journal" ORDER BY updatedAt DESC LIMIT 50',
+   *   sql: 'SELECT entryId, title, status, updatedAt FROM entity."ff-journal"',
    *   formationId: 'ff-journal',
    *   scopeKey: 'entryId',
    * });
    * // r.rows includes entries written since the last pool -- read-your-writes.
+   * // Impose order/limit yourself if needed:
+   * const recent = [...r.rows]
+   *   .sort((a, b) => String(b['updatedAt']).localeCompare(String(a['updatedAt'])))
+   *   .slice(0, 50);
    * ```
    */
   async queryEntityRowsFresh(
