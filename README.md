@@ -288,7 +288,7 @@ droplet (capability op: `token-write`).
 | `relay`        | `write`, `read`, `updateStatus`, `spawnChild`, `writeLog`, `enqueueToken`, `dequeueToken`        |
 | `actions`      | `dispatch`, `invoke`                                                                             |
 | `vectors`      | `query`, `queryByText`, `deleteFormation`                                                        |
-| `files`        | `reserveUpload`, `reserveDownload`, `pushPublic`, `readMeta`                                     |
+| `files`        | `pushPublic`, `readMeta` -- STUB (throw a clear not-implemented error). `reserveUpload` + `reserveDownload` are NOT stubs; see below. |
 | `catalog`      | `insert`, `list`, `tree`                                                                         |
 | `formations`   | `describe`, `list`, `warm`                                                                       |
 | `flows`        | `queryState`                                                                                     |
@@ -300,6 +300,20 @@ native binding to be present. The native binding installers live in
 `raindb-prime pkg/lightning/engines/goja/bindings.go` (goja) and
 `internal/lightning/podchannel` (pod); the code is the source of truth
 for which bindings are LIVE.
+
+Not every wrapper is native-or-STUB. Some are **GraphQL-backed** (they
+call a real GraphQL op through `ctx.fetch`, not a native binding, so
+they do NOT throw `BindingNotInstalled`):
+
+- **`files.reserveUpload`** -- LIVE via the `reserveDirectUpload` GraphQL
+  op; returns a presigned upload URL + expiry.
+- **`files.reserveDownload`** -- LIVE via the `readFloat` GraphQL op.
+  Returns the bytes FULLY BUFFERED (base64 + a self-contained `data:`
+  URL). It is NOT a presigned GET and NOT an expiring artifact -- there
+  is no server-side TTL; use it for small results.
+
+`files.pushPublic` and `files.readMeta` are the only `files` STUBs (they
+throw a clear not-implemented error pointing at the alternative).
 
 ### Examples
 
@@ -1078,11 +1092,13 @@ are content-hashed so they don't have this problem.
 | `@raindb/bolt-sdk` | raindb-lightning bolt runtime      | `@raindb/agent`     |
 |--------------------|-------------------------------------|---------------------|
 | 0.1.x              | 1.0.x (initial LIVE bindings)       | 0.7.x (optional)    |
-| 0.4.x (current)    | 1.0.x + `ctx.auth` + `ctx.response` | 0.8.x               |
+| 0.4.x              | 1.0.x + `ctx.auth` + `ctx.response` | 0.8.x               |
+| 0.7.x (current)    | 1.0.x + `planStrategy` (range/scan) forward + native `writeToken` scopeValue + pod `listDroplets` scopeValue | 0.8.x |
 | 1.0.x (target)     | 1.5.x (all gap cards landed)        | 1.0.x               |
 
 Pin both `@raindb/bolt-sdk` and the bolt's lightning runtime to a
-compatible row.
+compatible row. The exported `VERSION` constant matches `package.json`
+(`0.7.0`).
 
 ---
 

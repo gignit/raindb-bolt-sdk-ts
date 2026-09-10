@@ -36,6 +36,7 @@ import type { BoltContext } from '../types/bolt-context.js';
 import type { CursorPaginationOpts } from '../types/cursor.js';
 import { db } from '../bindings/db.js';
 import { sql } from '../bindings/sql.js';
+import type { SqlQueryInput } from '../bindings/sql.js';
 import { setCtx } from '../runtime/ctx-resolver.js';
 
 // ---------------------------------------------------------------------
@@ -305,17 +306,23 @@ async function tryRouteToNative(
     case 'listDroplets': {
       const formationId = String(input['formationId'] ?? '');
       const prefix = input['prefix'] as string | undefined;
+      const scopeValue = input['scopeValue'] as string | undefined;
       const pageSize = input['pageSize'] as number | undefined;
       const after = input['after'] as string | undefined;
       if (!formationId) return undefined;
       // listDroplets now returns a real {droplets, nextCursor, hasMore} page
       // (substrate H12 fix), so pass the cursor through and forward the page
       // envelope directly -- no more synthesizing hasMore from the array
-      // length against the requested page size.
+      // length against the requested page size. scopeValue is the SEMANTIC
+      // entity narrowing (ListDropletsInput.scopeValue in the SDL); dropping it
+      // here would silently widen a scoped query to the whole formation -- the
+      // host resolves scopeValue -> the entity's key prefix, so a raw `prefix`
+      // is NOT a substitute (never hash/append paths in JS).
       const opts: CursorPaginationOpts = {};
       if (pageSize !== undefined) opts.first = pageSize;
       if (after !== undefined) opts.after = after;
       if (prefix !== undefined) opts.prefix = prefix;
+      if (scopeValue !== undefined) opts.scopeValue = scopeValue;
       const page = await db.listDroplets({ formationId, opts });
       return {
         data: {
@@ -338,12 +345,15 @@ async function tryRouteToNative(
       const formationId = String(input['formationId'] ?? '');
       const indexId = String(input['indexId'] ?? input['indexName'] ?? '');
       if (!formationId || !indexId) return undefined;
-      // The agent's ListKeysInput carries cursor-pagination fields
-      // (first/after/orderByDesc/...). Forward the ones the native
-      // binding's CursorPaginationOpts accepts; the wrapper defaults
-      // the rest.
+      // Forward the cursor-pagination fields the NATIVE listKeys binding
+      // actually accepts -- `first/after/last/before/prefix`
+      // (runtime.ListPageOptions / handleDBListKeys). Descending paging is
+      // `last`+`before`, NOT an `orderByDesc` flag: the prior allowlist
+      // forwarded a non-existent `orderByDesc` and DROPPED `last`/`before`,
+      // so a descending page request silently paged ascending. Match the
+      // binding contract, not the assumed GraphQL shape.
       const opts: Record<string, unknown> = {};
-      for (const k of ['first', 'after', 'orderByDesc', 'prefix']) {
+      for (const k of ['first', 'after', 'last', 'before', 'prefix']) {
         if (input[k] !== undefined) opts[k] = input[k];
       }
       const page = await db.listKeys({
@@ -357,8 +367,23 @@ async function tryRouteToNative(
     case 'executeSQL': {
       const sqlText = String(input['sql'] ?? input['query'] ?? '');
       if (!sqlText) return undefined;
-      const withFreshness = input['withFreshness'] === true;
-      const out = await sql.query({ sql: sqlText, withFreshness });
+      // Forward EVERY option the SQLInput wire contract carries, not just the
+      // SQL text + withFreshness: formationId (prelude scoping + freshness
+      // bookmark), timeoutMs, and planStrategy (range/scan). Dropping them here
+      // silently discarded a caller's explicit planner choice / formation hint.
+      // Defined-only so an omitted option stays the host default.
+      const sqlInput: SqlQueryInput = { sql: sqlText };
+      if (typeof input['formationId'] === 'string') {
+        sqlInput.formationId = input['formationId'];
+      }
+      if (typeof input['timeoutMs'] === 'number') {
+        sqlInput.timeoutMs = input['timeoutMs'];
+      }
+      if (input['planStrategy'] === 'range' || input['planStrategy'] === 'scan') {
+        sqlInput.planStrategy = input['planStrategy'];
+      }
+      sqlInput.withFreshness = input['withFreshness'] === true;
+      const out = await sql.query(sqlInput);
       return { data: { executeSQL: out } };
     }
 

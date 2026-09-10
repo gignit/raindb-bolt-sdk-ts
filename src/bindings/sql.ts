@@ -46,6 +46,24 @@ import { BINDING } from '../internal/constants.js';
 import { db } from './db.js';
 
 /**
+ * Periscope query plan strategy for a single SQL query. Selects HOW the
+ * answer-preserving read set is computed from the pinned snapshot:
+ *
+ * - `'range'` (the substrate default): manifest-summary reduction -- drops
+ *   absorbed lower-tier manifests using the snapshot summaries alone.
+ * - `'scan'`: native Iceberg file-level planning.
+ *
+ * Both strategies return IDENTICAL rows; they differ only in how the read set
+ * is planned. Omit to use the formation's configured default
+ * (`views.queryDefaults.planStrategy`, itself defaulting to `range`). The
+ * substrate rejects any other value (empty string, `'standard'`, `'Scan'`,
+ * `' scan'`) with a `bad_request`. LIVE on both engines since raindb-prime
+ * commit 5fdd75fc (per-query override) and 507666a0 (range/scan selected by
+ * planStrategy alone).
+ */
+export type PlanStrategy = 'range' | 'scan';
+
+/**
  * Input shape for {@link sql.query}. The wrapper repacks this
  * into the goja binding's positional convention `(sql, opts)`.
  */
@@ -65,6 +83,14 @@ export interface SqlQueryInput {
    * config used by the api server).
    */
   timeoutMs?: number;
+  /**
+   * Per-query periscope plan strategy override ({@link PlanStrategy}). Omit to
+   * use the formation's configured default. Forwarded verbatim to the host,
+   * which validates it (goja `extractSQLQueryOptions` / pod-channel
+   * `handleSQLQuery` -> `runtime.SQLQueryOptions.PlanStrategy`); an invalid
+   * value is rejected substrate-side, not silently dropped.
+   */
+  planStrategy?: PlanStrategy;
   /**
    * Ask the substrate to populate the result's `latest[]` freshness bookmark
    * (one {@link SqlFreshnessRow} per formation the query touches). LIVE: the
@@ -225,6 +251,7 @@ export interface SqlBinding {
       formationId?: string;
       timeoutMs?: number;
       withFreshness?: boolean;
+      planStrategy?: PlanStrategy;
     },
   ): Promise<SqlResult>;
 }
@@ -308,11 +335,19 @@ export const sql = {
     }
     // Repack the named-args input into the goja binding's
     // positional convention. Only forward defined fields so the
-    // substrate sees an absent rather than zero-valued option.
-    const opts: { formationId?: string; timeoutMs?: number; withFreshness?: boolean } = {};
+    // substrate sees an absent rather than zero-valued option
+    // (an omitted planStrategy => formation default; a defined one
+    // is validated host-side, never dropped or defaulted in JS).
+    const opts: {
+      formationId?: string;
+      timeoutMs?: number;
+      withFreshness?: boolean;
+      planStrategy?: PlanStrategy;
+    } = {};
     if (input.formationId !== undefined) opts.formationId = input.formationId;
     if (input.timeoutMs !== undefined) opts.timeoutMs = input.timeoutMs;
     if (input.withFreshness !== undefined) opts.withFreshness = input.withFreshness;
+    if (input.planStrategy !== undefined) opts.planStrategy = input.planStrategy;
     try {
       const out = await ctx.sql.query(input.sql, opts);
       return out as SqlResult;
@@ -344,6 +379,23 @@ export const sql = {
    * the pooled data and show a freshness/"updating" indicator from the bookmark
    * instead of trying to freshen the aggregate.
    *
+   * LIMITATION -- read before relying on this. The merge does NOT re-apply the
+   * query's WHERE / ORDER BY / LIMIT over the combined (snapshot + late-tail) set:
+   * late rows are projected onto the columns, deduped by `scopeKey`, and led in
+   * newest-first, then the snapshot rows follow. So:
+   *   - a late row that NO LONGER matches the WHERE can appear (the predicate is
+   *     not re-evaluated on the tail);
+   *   - the SQL ORDER BY is NOT re-imposed across the late rows (they lead by
+   *     write order, not the query's sort);
+   *   - a LIMIT is NOT re-applied, so the merged result can exceed it.
+   * Correctly reconciling predicate/sort/limit over an eventually-consistent
+   * snapshot is a PLATFORM concern (the bounded `CURRENT_BOUNDED` mode in
+   * raindb-prime docs/followup/bounded-current-row-query.md, still OPEN); this
+   * helper is a best-effort entity-set freshen, NOT that operation, and it does
+   * NOT parse SQL. Use it for an unordered/unfiltered "did my writes land" set;
+   * for ordered/filtered/limited current lists, sort+filter+slice the result
+   * yourself over stable columns, or await the platform bounded-current mode.
+   *
    * FAIL-LOUD: if the tail harvest errors, this THROWS -- it never silently returns
    * the stale snapshot (a method named `*Fresh` must not hand back stale data).
    *
@@ -355,12 +407,17 @@ export const sql = {
    *
    * @example
    * ```ts
+   * // Unordered read-your-writes entity SET (no reliance on ORDER BY/LIMIT):
    * const r = await sql.queryEntityRowsFresh({
-   *   sql: 'SELECT entryId, title, status, updatedAt FROM entity."ff-journal" ORDER BY updatedAt DESC LIMIT 50',
+   *   sql: 'SELECT entryId, title, status, updatedAt FROM entity."ff-journal"',
    *   formationId: 'ff-journal',
    *   scopeKey: 'entryId',
    * });
    * // r.rows includes entries written since the last pool -- read-your-writes.
+   * // Impose order/limit yourself if needed:
+   * const recent = [...r.rows]
+   *   .sort((a, b) => String(b['updatedAt']).localeCompare(String(a['updatedAt'])))
+   *   .slice(0, 50);
    * ```
    */
   async queryEntityRowsFresh(
