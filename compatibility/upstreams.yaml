@@ -2,7 +2,25 @@
 # wire types + host bindings were reconciled + validated against.
 upstreams:
   raindb-prime:
-    reconciled_sha: 5a7a2177
+    reconciled_sha: cb445642
+    # 2026-09-10 bolt.sdk_pods_reconcile: advanced from 5a7a2177 -> cb445642
+    # (planStrategy forward + native writeToken scopeValue + pod listDroplets
+    # scopeValue + agent-bridge option reconcile). This reconciliation resolves
+    # the previously-noted followup-F debt: the executable live proof now exists
+    # for BOTH engines (see live_validation below), not just a coder claim.
+    live_validation:
+      command: "raindb-test-lightning-goja scripts/run-matrix.sh --profile core.prod.platform-bolts"
+      proof: >-
+        Parity matrix against the deployed goja host (raindb-prime@cb445642) AND
+        the freshly-rolled nodejs-20 pod image (imageId 0b00b196): the three
+        reconciliation probes -- sql.planStrategy(range==scan), db.writeToken
+        .scopeValue, db.listDroplets.scopeValue -- are ok|ok|SAME on both engines;
+        goja=48 ok, pod=48 ok, IDENTICAL; zero engine divergences. This is the
+        real-engine executable proof the goja-only coder lock lacked.
+      reconciled_shas:
+        - raindb-prime@cb445642
+        - raindb-lightning-pods@a3d1d4a
+        - raindb-test-lightning-goja@a5ba8f1
     validation:
       command: "coder_go_* re-verification of the goja-host boundary + boundary-source diff (peer-reviewed by an independent claude agent, 119 coder tool calls)"
       # BOUNDARY-SOURCE GUARD (widened after peer review): this SDK's Droplet
