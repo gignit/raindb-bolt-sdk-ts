@@ -620,7 +620,9 @@ test('queryEntityRowsFresh merges the not-yet-pooled tail (newest wins, deduped 
               formationId: 'ff-journal',
               snapshotDropletId: 'd-snap',
               snapshotKey: 'k',
-              currentDropletId: 'd-cur',
+              // The current watermark is the newest tail droplet (d3): a complete
+              // harvest observes it, satisfying the Follow-up B coverage check.
+              currentDropletId: 'd3',
               currentKey: 'k2',
               indexPrefix: 'indexes/ff-journal/by-update/',
               freshnessStatus: 'BEHIND',
@@ -634,7 +636,7 @@ test('queryEntityRowsFresh merges the not-yet-pooled tail (newest wins, deduped 
         writeDroplet: async () => ({ dropletId: 'x' }),
         listDroplets: async () => ({ droplets: [], hasMore: false }),
         // The tail after the snapshot cursor: a newer e1 revision + a brand-new e2.
-        // listSince is asc (oldest-first).
+        // listSince is asc (oldest-first); the last droplet is the watermark d3.
         listSince: async (_f: string, _cursor: string) => ({
           droplets: [
             { dropletId: 'd2', formationId: 'ff-journal', schemaVersion: 1, ts: 2, author: 'a', payload: { entryId: 'e1', title: 'e1-NEW' } },
@@ -738,4 +740,152 @@ test('queryEntityRowsFresh FAILS LOUD on harvest error (never returns stale)', a
     () => sql.queryEntityRowsFresh({ sql: 'SELECT entryId FROM entity."ff-journal"', formationId: 'ff-journal' }),
     (e: unknown) => e instanceof RainDBBoltError && /harvest failed/.test((e as Error).message),
   );
+});
+
+// --- Follow-up B (R3): the helper must not return the base as "fresh" without
+// establishing bookmark coverage, tail completeness, or valid row identity. ---
+
+function freshCtx(overrides: {
+  latest?: unknown[];
+  rows?: Array<Record<string, unknown>>;
+  columns?: string[];
+  listSince?: (...args: unknown[]) => Promise<unknown>;
+}) {
+  return mockCtx({
+    sql: {
+      query: async () => ({
+        columns: overrides.columns ?? ['entryId'],
+        rows: overrides.rows ?? [{ entryId: 'e1' }],
+        rowCount: (overrides.rows ?? [{ entryId: 'e1' }]).length,
+        durationMs: 1,
+        truncated: false,
+        latest: (overrides.latest ?? []) as never,
+      }),
+    },
+    db: {
+      readLatest: async () => null,
+      readDroplet: async () => null,
+      writeDroplet: async () => ({ dropletId: 'x' }),
+      listDroplets: async () => ({ droplets: [], hasMore: false }),
+      listSince: (overrides.listSince ?? (async () => ({ droplets: [], hasMore: false }))) as never,
+    },
+  });
+}
+
+test('queryEntityRowsFresh REJECTS when there is NO bookmark coverage (absence of evidence != CURRENT)', async () => {
+  // Empty latest[] means the server produced no freshness evidence. A *Fresh
+  // method must not treat "no bookmark" as "confirmed current".
+  setCtx(freshCtx({ latest: [] }));
+  await assert.rejects(
+    () => sql.queryEntityRowsFresh({ sql: 'SELECT entryId FROM entity."ff-journal"', formationId: 'ff-journal', scopeKey: 'entryId' }),
+    (e: unknown) => e instanceof RainDBBoltError && /coverage|bookmark|freshness/i.test((e as Error).message),
+  );
+});
+
+test('queryEntityRowsFresh REJECTS a BEHIND bookmark whose tail never reaches the current watermark', async () => {
+  // BEHIND: the snapshot cursor (d-100) is chronologically BEFORE the current
+  // watermark (d-900) -- dropletIds are UUIDv7, lexicographic == chronological.
+  // The harvest returns an empty page with hasMore:false, so maxSeen stays at
+  // the snapshot cursor and never reaches d-900 -> coverage is unproven. The old
+  // code returned the stale base on late.length===0.
+  setCtx(freshCtx({
+    latest: [{
+      formationId: 'ff-journal', snapshotDropletId: 'd-100', snapshotKey: 'k',
+      currentDropletId: 'd-900', currentKey: 'k2',
+      indexPrefix: 'indexes/ff-journal/by-update/', freshnessStatus: 'BEHIND',
+    }],
+    listSince: async () => ({ droplets: [], hasMore: false }),
+  }));
+  await assert.rejects(
+    () => sql.queryEntityRowsFresh({ sql: 'SELECT entryId FROM entity."ff-journal"', formationId: 'ff-journal', scopeKey: 'entryId' }),
+    (e: unknown) => e instanceof RainDBBoltError && /watermark|coverage|caught up|current/i.test((e as Error).message),
+  );
+});
+
+test('queryEntityRowsFresh does NOT accept a premature empty page (hasMore:true) as complete; continues the walk', async () => {
+  // An empty page with hasMore:true is a transient gap, NOT "caught up". The old
+  // code broke the loop on droplets.length===0 even with hasMore:true, so it
+  // stopped early and (via late.length===0) returned the stale base. The fix
+  // must CONTINUE the walk to the next page, which here reaches the watermark.
+  let calls = 0;
+  setCtx(freshCtx({
+    columns: ['entryId', 'title'],
+    rows: [{ entryId: 'e1', title: 'e1-OLD' }],
+    latest: [{
+      formationId: 'ff-journal', snapshotDropletId: 'd-snap', snapshotKey: 'k',
+      currentDropletId: 'd-cur', currentKey: 'k2',
+      indexPrefix: 'indexes/ff-journal/by-update/', freshnessStatus: 'BEHIND',
+    }],
+    listSince: async () => {
+      calls += 1;
+      if (calls === 1) {
+        // Transient empty page WITH more to come -- must not terminate here.
+        return { droplets: [], nextCursor: 'c1', hasMore: true };
+      }
+      // Second page reaches the watermark d-cur with a valid identity.
+      return {
+        droplets: [
+          { dropletId: 'd-cur', formationId: 'ff-journal', schemaVersion: 1, ts: 3, author: 'a', payload: { entryId: 'e1', title: 'e1-NEW' } },
+        ],
+        hasMore: false,
+      };
+    },
+  }));
+  const r = await sql.queryEntityRowsFresh({ sql: 'SELECT entryId, title FROM entity."ff-journal"', formationId: 'ff-journal', scopeKey: 'entryId' });
+  // Continued past the empty page, harvested the fresh e1.
+  assert.ok(calls >= 2, 'must continue past a premature empty page');
+  assert.deepEqual(r.rows, [{ entryId: 'e1', title: 'e1-NEW' }]);
+});
+
+test('queryEntityRowsFresh REJECTS a late row missing the identity value (cannot dedup null-key rows)', async () => {
+  // The tail contains a droplet whose payload lacks the scopeKey. Projection
+  // null-fills it, and the old Map merged unrelated null-key rows. The identity
+  // must be validated as non-null before dedup.
+  setCtx(freshCtx({
+    columns: ['entryId', 'title'],
+    rows: [{ entryId: 'e1', title: 'old' }],
+    latest: [{
+      formationId: 'ff-journal', snapshotDropletId: 'd-snap', snapshotKey: 'k',
+      currentDropletId: 'd-cur', currentKey: 'k2',
+      indexPrefix: 'indexes/ff-journal/by-update/', freshnessStatus: 'BEHIND',
+    }],
+    listSince: async () => ({
+      droplets: [
+        // reaches the watermark (dropletId d-cur) so coverage is satisfied,
+        // but this payload has NO entryId -> null identity.
+        { dropletId: 'd-cur', formationId: 'ff-journal', schemaVersion: 1, ts: 2, author: 'a', payload: { title: 'no-id' } },
+      ],
+      hasMore: false,
+    }),
+  }));
+  await assert.rejects(
+    () => sql.queryEntityRowsFresh({ sql: 'SELECT entryId, title FROM entity."ff-journal"', formationId: 'ff-journal', scopeKey: 'entryId' }),
+    (e: unknown) => e instanceof RainDBBoltError && /identity|scopeKey|null/i.test((e as Error).message),
+  );
+});
+
+test('queryEntityRowsFresh SUCCEEDS when the tail reaches the current watermark with valid identities', async () => {
+  // Positive control: BEHIND, the harvest observes d-cur, and every late row has
+  // a non-null entryId -> the merge proceeds and returns fresh rows.
+  setCtx(freshCtx({
+    columns: ['entryId', 'title'],
+    rows: [{ entryId: 'e1', title: 'e1-OLD' }],
+    latest: [{
+      formationId: 'ff-journal', snapshotDropletId: 'd-snap', snapshotKey: 'k',
+      currentDropletId: 'd-cur', currentKey: 'k2',
+      indexPrefix: 'indexes/ff-journal/by-update/', freshnessStatus: 'BEHIND',
+    }],
+    listSince: async () => ({
+      droplets: [
+        { dropletId: 'd2', formationId: 'ff-journal', schemaVersion: 1, ts: 2, author: 'a', payload: { entryId: 'e1', title: 'e1-NEW' } },
+        { dropletId: 'd-cur', formationId: 'ff-journal', schemaVersion: 1, ts: 3, author: 'a', payload: { entryId: 'e2', title: 'e2' } },
+      ],
+      hasMore: false,
+    }),
+  }));
+  const r = await sql.queryEntityRowsFresh({ sql: 'SELECT entryId, title FROM entity."ff-journal"', formationId: 'ff-journal', scopeKey: 'entryId' });
+  assert.deepEqual(r.rows, [
+    { entryId: 'e2', title: 'e2' },
+    { entryId: 'e1', title: 'e1-NEW' },
+  ]);
 });

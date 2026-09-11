@@ -46,6 +46,24 @@ import { BINDING } from '../internal/constants.js';
 import { db } from './db.js';
 
 /**
+ * Tuning constants for the queryEntityRowsFresh tail harvest (PR 3, no magic
+ * numbers in business logic). These bound the by-update tail walk the helper
+ * performs via db.listSince:
+ *
+ * - HARVEST_PAGE_SIZE: droplets requested per listSince page. Sized to amortize
+ *   the per-page round trip against memory (each page buffers full droplet
+ *   payloads) for the not-yet-pooled tail, which is bounded by the periscope
+ *   pool cadence, not the whole formation.
+ * - HARVEST_MAX_PAGES: hard ceiling on pages per behind-formation. A tail longer
+ *   than HARVEST_PAGE_SIZE * HARVEST_MAX_PAGES means the snapshot is too far
+ *   behind to freshen cheaply; the helper fails loud (PR 5.3) rather than
+ *   walking unboundedly, directing the caller to the platform bounded-current
+ *   mode. The product (default 20 * 200 = 4000 rows) is a deliberate cap.
+ */
+const HARVEST_PAGE_SIZE = 200;
+const HARVEST_MAX_PAGES = 20;
+
+/**
  * Periscope query plan strategy for a single SQL query. Selects HOW the
  * answer-preserving read set is computed from the pinned snapshot:
  *
@@ -397,12 +415,26 @@ export const sql = {
    * yourself over stable columns, or await the platform bounded-current mode.
    *
    * FAIL-LOUD: this THROWS -- never silently returns the stale snapshot (a method
-   * named `*Fresh` must not hand back stale data) -- when (a) the tail harvest
-   * errors, (b) a bookmark is UNAVAILABLE (no by-update index -> nothing to
-   * harvest, freshness cannot be established), (c) a BEHIND/UNKNOWN bookmark
-   * carries no snapshot cursor (coverage unprovable), or (d) no merge key can be
-   * established (a merge would double-count/drop rows). It returns the base
-   * snapshot ONLY when every bookmark is genuinely CURRENT (nothing to harvest).
+   * named `*Fresh` must not hand back stale data) -- when it cannot PROVE the
+   * result is fresh:
+   *   (a) the tail harvest errors;
+   *   (b) NO freshness bookmark was returned (absence of evidence is not proof of
+   *       CURRENT);
+   *   (c) a bookmark is UNAVAILABLE (no by-update index -> nothing to harvest);
+   *   (d) a BEHIND/UNKNOWN bookmark carries no snapshot cursor (coverage
+   *       unprovable);
+   *   (e) the tail walk does not cleanly reach end-of-index, does not advance to
+   *       the current watermark (currentDropletId; dropletIds are UUIDv7 so the
+   *       compare is chronological), gets stuck, or exceeds the harvest bound
+   *       (HARVEST_MAX_PAGES * HARVEST_PAGE_SIZE) -- i.e. the tail is not proven
+   *       complete;
+   *   (f) a harvested tail row is missing the merge identity (a null-key row
+   *       cannot be deduped against the snapshot).
+   * It returns the base snapshot ONLY when a bookmark set is present and every
+   * bookmark is genuinely CURRENT (there is nothing to harvest). The watermark
+   * droplet itself need not appear in the tail: an expired/purged entity is a
+   * tombstone that listSince skips (raindb-prime 48c55e55), so completeness is
+   * proven by CURSOR coverage + clean end-of-index, not droplet presence.
    *
    * @param input.scopeKey the entity-identity column both the SQL rows and the late
    *   droplet payloads carry (e.g. `entryId`); used to dedupe the merge. Defaults
@@ -449,7 +481,21 @@ export const sql = {
       );
     }
 
+    // COVERAGE: withFreshness was requested, so an EMPTY bookmark set is the
+    // server producing no freshness evidence -- absence of evidence, NOT proof
+    // of CURRENT. A *Fresh method cannot honestly return base here (R3/PR 5.3).
+    if (bookmarks.length === 0) {
+      throw new RainDBBoltError(
+        'sql.queryEntityRowsFresh: no freshness bookmark was returned, so ' +
+          'freshness cannot be established. Absence of a bookmark is not proof ' +
+          'the snapshot is current. Use sql.query() for an honest eventual read.',
+        { binding: 'ctx.sql.queryEntityRowsFresh', input: { sql: input.sql.slice(0, 80) } },
+      );
+    }
+
     const behind = bookmarks.filter((bm) => needsHarvest(bm));
+    // Every bookmark is CURRENT (the only remaining status after UNAVAILABLE and
+    // BEHIND/UNKNOWN are excluded): the snapshot IS confirmed fresh -> return base.
     if (behind.length === 0) return base;
 
     const cols = base.columns.length
@@ -483,15 +529,37 @@ export const sql = {
           { binding: 'ctx.sql.queryEntityRowsFresh', input: { formationId: bm.formationId } },
         );
       }
+      // dropletIds are UUIDv7 -- lexicographic compare is chronological (see
+      // raindb-prime pkg/periscope/latest.go). The by-update tail is ASC, so we
+      // track the max dropletId observed and consider the harvest "caught up"
+      // when the walk cleanly exhausts the index AND the cursor has advanced to
+      // >= the current watermark. The watermark droplet itself may legitimately
+      // NOT appear in the tail (its entity can be an expired/purged tombstone,
+      // which listSince skips -- raindb-prime 48c55e55), so completeness is
+      // proven by CURSOR coverage + clean exhaustion, not droplet presence.
       let cursor = bm.snapshotDropletId;
-      // Walk pages from the snapshot cursor forward until caught up.
+      let maxSeen = bm.snapshotDropletId;
+      let exhausted = false;
+      let pages = 0;
       for (;;) {
+        if (pages >= HARVEST_MAX_PAGES) {
+          // Too far behind to freshen within the bound: fail loud (PR 5.3),
+          // never return a partially-harvested (still-stale) base.
+          throw new RainDBBoltError(
+            `sql.queryEntityRowsFresh: ${bm.formationId} tail exceeds ` +
+              `${HARVEST_MAX_PAGES} pages of ${HARVEST_PAGE_SIZE}; the snapshot is ` +
+              `too far behind to freshen. Await a pool cycle or use the platform ` +
+              `bounded-current mode.`,
+            { binding: 'ctx.sql.queryEntityRowsFresh', input: { formationId: bm.formationId } },
+          );
+        }
+        pages += 1;
         let page;
         try {
           page = await db.listSince({
             formationId: bm.formationId,
             sinceCursor: cursor,
-            opts: { first: 200 },
+            opts: { first: HARVEST_PAGE_SIZE },
           });
         } catch (err) {
           throw new RainDBBoltError(
@@ -502,13 +570,50 @@ export const sql = {
         }
         // listSince returns full droplets; the entity row is its payload.
         for (const d of page.droplets) {
+          if (typeof d.dropletId === 'string' && d.dropletId > maxSeen) {
+            maxSeen = d.dropletId;
+          }
           if (d.payload) late.push(d.payload);
         }
-        if (!page.nextCursor || page.droplets.length === 0) break;
+        // Terminate ONLY on a real end-of-index signal: no more pages. An empty
+        // page with hasMore:true is a transient gap, NOT "caught up" -- continue
+        // (the old code broke here on droplets.length===0 and returned stale).
+        if (!page.hasMore || !page.nextCursor) {
+          exhausted = true;
+          break;
+        }
+        if (page.nextCursor === cursor) {
+          // No forward progress but hasMore is still set: the walk is stuck.
+          // Fail loud rather than loop or accept an incomplete tail (PR 5.3).
+          throw new RainDBBoltError(
+            `sql.queryEntityRowsFresh: ${bm.formationId} tail cursor did not ` +
+              `advance (${cursor}); cannot prove freshness coverage.`,
+            { binding: 'ctx.sql.queryEntityRowsFresh', input: { formationId: bm.formationId } },
+          );
+        }
         cursor = page.nextCursor;
       }
+      // COVERAGE PROOF: the walk must have cleanly exhausted the index AND, when
+      // the current watermark is known (BEHIND carries a currentDropletId), the
+      // observed tail must have advanced to at least it. Otherwise the tail is
+      // incomplete and returning the merged rows would silently omit the newest
+      // writes -- fail loud (R3/PR 5.3).
+      if (!exhausted) {
+        throw new RainDBBoltError(
+          `sql.queryEntityRowsFresh: ${bm.formationId} tail did not reach ` +
+            `end-of-index; freshness coverage is unproven.`,
+          { binding: 'ctx.sql.queryEntityRowsFresh', input: { formationId: bm.formationId } },
+        );
+      }
+      if (bm.currentDropletId && maxSeen < bm.currentDropletId) {
+        throw new RainDBBoltError(
+          `sql.queryEntityRowsFresh: ${bm.formationId} harvest reached ${maxSeen} ` +
+            `but the current watermark is ${bm.currentDropletId}; the tail did not ` +
+            `catch up to the newest write, so the result would be stale.`,
+          { binding: 'ctx.sql.queryEntityRowsFresh', input: { formationId: bm.formationId } },
+        );
+      }
     }
-    if (late.length === 0) return base;
 
     // Project a late droplet onto the query's columns (null-fill missing).
     const project = (obj: Record<string, unknown>): Record<string, unknown> => {
@@ -516,6 +621,21 @@ export const sql = {
       for (const c of cols) r[c] = c in obj ? obj[c] : null;
       return r;
     };
+
+    // Validate each late row carries a NON-NULL logical identity BEFORE dedup: a
+    // row missing the merge key projects to a null key, and merging unrelated
+    // null-key rows would drop or combine distinct entities. Fail loud (R3).
+    const projected = late.map(project);
+    for (const row of projected) {
+      if (row[key] === null || row[key] === undefined) {
+        throw new RainDBBoltError(
+          `sql.queryEntityRowsFresh: a harvested tail row is missing the merge ` +
+            `identity ${JSON.stringify(key)}; cannot dedup an identity-less row ` +
+            `against the snapshot.`,
+          { binding: 'ctx.sql.queryEntityRowsFresh', input: { formationId: input.formationId, scopeKey: key } },
+        );
+      }
+    }
 
     // Merge: late rows first (newest), then snapshot rows; first occurrence of a
     // scope key wins (a late row supersedes the stale snapshot row).
@@ -528,7 +648,7 @@ export const sql = {
       byKey.set(k, row);
     };
     // listSince is asc (oldest-first); reverse so newest late rows lead.
-    for (const d of late.map(project).reverse()) add(d);
+    for (const d of projected.reverse()) add(d);
     for (const row of base.rows) add(row);
 
     const merged = order.map((k) => byKey.get(k)!);
