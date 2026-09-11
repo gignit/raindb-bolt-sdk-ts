@@ -6,6 +6,11 @@ and the capabilities documented for the operation.
 
 ## Unreleased
 
+- Update development tooling to TypeScript 7.0.2, tsx 4.23.13, and Node type
+  declarations 22.20.2 in the SDK and example. Explicitly load Node declarations
+  for TypeScript 7's new ambient-type defaults; retain the ES2022 output target.
+- Refresh both lockfiles to esbuild 0.28.2, including the fix for
+  [GHSA-g7r4-m6w7-qqqr](https://github.com/evanw/esbuild/security/advisories/GHSA-g7r4-m6w7-qqqr).
 - Preserve `listSince` availability and returned continuation cursors when
   checking freshness. Valid empty pages can continue; missing or stalled
   continuation cannot be accepted as complete. Include final cursor coverage.
