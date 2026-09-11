@@ -20,12 +20,12 @@ upstreams:
       # Follow-up D pod re-roll. Superseded coordinates preserved in the comment
       # trail below; the current proven set is here.
       reconciled_source: raindb-prime@40803eaa
-      deployed_api_binary: raindb-prime@61b40c4b68fd38860ee5b5a681c5812edce93f32
+      deployed_api_binary: raindb-prime@434da86c
       configured_pod_image: 7eab6bc068e66d189cba5fce8e2314e1026104fb3d2ecfffe65111565406d9b4
       running_pod_image: 7eab6bc068e66d189cba5fce8e2314e1026104fb3d2ecfffe65111565406d9b4
       proof: >-
         Parity matrix against the DEPLOYED goja host binary
-        (raindb-prime@61b40c4b, /version-confirmed) AND the rolled nodejs-20 pod
+        (raindb-prime@434da86c, /version-confirmed) AND the rolled nodejs-20 pod
         image (imageId 7eab6bc0, host-pulled -- podman images shows the digest):
         every reconciliation probe is ok|ok|SAME on both engines --
         sql.planStrategy(range==scan) incl. the invalid-planStrategy host-reject,
