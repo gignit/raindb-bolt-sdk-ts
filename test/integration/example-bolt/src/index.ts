@@ -50,7 +50,7 @@ export async function onHttpRequest(
   if (req.method === 'GET' && req.path === '/echo-stream') {
     return onEchoStream(ctx, req);
   }
-  // v0.2.0 -- newly LIVE bindings (substrate commit af5e9eb).
+  // v0.2.0 -- newly LIVE bindings.
   if (req.method === 'POST' && req.path === '/object-roundtrip') {
     return onObjectRoundtrip(ctx, req);
   }
@@ -61,7 +61,7 @@ export async function onHttpRequest(
     return onSqlProbe(ctx, req);
   }
   // v0.3.0 -- Tier 2 + Wave 2.5 bindings (substrate commits
-  // eee3eac + f934956).
+  // the supported runtime + the supported runtime).
   if (req.method === 'POST' && req.path.startsWith('/tag-roundtrip/')) {
     return onTagRoundtrip(ctx, req);
   }

@@ -1,10 +1,4 @@
 // handlers/keys-walk.ts -- exercises db.listKeys with paging.
-// LIVE since v0.2.0 (substrate commit af5e9eb).
-//
-// Demonstrates a paginated walk of an index: gather up to maxPages
-// pages, accumulate the keys, return the totals. The pattern is
-// useful for live-feed bootstraps, full-index audits, and any
-// O(n) walk that doesn't need droplet payloads.
 
 import { db, log, CapabilityDenied, BindingNotInstalled } from '@raindb/bolt-sdk';
 import type {
@@ -86,7 +80,7 @@ export async function onKeysWalk(
         status: 501,
         body: {
           error: 'ctx.db.listKeys not installed on this lightning binary',
-          hint: 'requires substrate >= phoenix commit af5e9eb',
+          hint: 'requires a runtime providing this binding',
         },
       };
     }

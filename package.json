@@ -32,7 +32,6 @@
     "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json",
     "lint": "tsc --noEmit && tsc -p tsconfig.test.json",
     "test": "node --import tsx --test --test-reporter=spec test/unit/*.test.ts test/unit/shape-compat/*.test.ts",
-    "test:int": "node --import tsx --test --test-reporter=spec test/integration/*.test.ts",
     "clean": "rm -rf dist",
     "prepublishOnly": "npm run lint && npm run test && npm run build"
   },

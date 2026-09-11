@@ -1,13 +1,4 @@
 // bindings/catalog.ts -- STUBBED ctx.catalog.* surface.
-//
-// CONTRACT-UNCERTAIN per handoff §C: the audit suggests considering
-// whether `insert/list/tree` is enough for v1 of the catalog surface,
-// or whether `transfer/update/delete` should also ship. The package
-// stubs all six verbs; the three uncertain ones are marked with
-// TODO comments referencing the audit.
-//
-// TODO(substrate-card-P): confirm v1 scope for catalog verbs.
-// Audit §P (Gap 11).
 
 import { resolveCtx } from '../runtime/ctx-resolver.js';
 import { stubOrDispatch } from '../runtime/binding-not-installed.js';

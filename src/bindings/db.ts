@@ -1,40 +1,4 @@
 // bindings/db.ts -- typed wrappers for ctx.db.*.
-//
-// Two shapes coexist in this file:
-//
-//   1. `DbBinding` -- the type of `BoltContext.db`. Mirrors what the
-//      goja sandbox actually installs: positional-args methods that
-//      throw goja-shaped errors. Bolts can call `ctx.db.readLatest(
-//      formationId, indexId, scopeValue)` directly as an escape
-//      hatch, but the recommended path is the SDK's wrapper.
-//
-//   2. `db` (the const exported below) -- the ergonomic wrapper. Takes
-//      named-args objects, throws typed RainDBBoltError subclasses,
-//      and routes through `setCtx(ctx)` so the call site reads
-//      cleanly without ctx threading.
-//
-// LIVE methods (audit §B / §G / §I / §L / §M; goja installer in
-// `pkg/lightning/engines/goja/bindings.go::installDBBinding`):
-//   - readLatest(formationId, indexId, scopeValue)
-//   - readDroplet(formationId, dropletId)
-//   - writeDroplet(formationId, payload)
-//   - listDroplets(formationId, prefix?, pageSize?)
-//   - listKeys(formationId, indexId, opts?)         [LIVE since v0.2.0]
-//   - listSince(formationId, sinceCursor, opts?)    [LIVE since v0.2.0]
-//   - tag(formationId, scopeValue, tags)            [LIVE since v0.3.0]
-//   - untag(formationId, scopeValue, tagKeys)       [LIVE since v0.3.0]
-//   - expire(formationId, scopeValue)               [LIVE since v0.3.0]
-//   - expirationDays()                              [LIVE since v0.3.0]
-//   - writeBatch(formationId, items, opts?)         [LIVE since v0.3.0]
-//
-// STUBBED methods (substrate-side pending; per-method JSDoc points
-// at the audit gap card):
-//   - readAt (audit §R Gap 13)
-//   - readCurrent, resolveFormation (audit §S Gap 14)
-//
-// Cross-validation: input/output types match @raindb/agent's
-// droplet_* tools field-for-field per handoff §J. The wrapper does
-// no shape transformation -- pass-through with type narrowing.
 
 import { resolveCtx } from '../runtime/ctx-resolver.js';
 import { translateBindingError } from '../errors/from-binding.js';
@@ -137,7 +101,6 @@ export interface ListSinceInput {
 /**
  * One row in a {@link WriteBatchInput.items} array. Mirrors the
  * substrate `runtime.BatchItem` shape (per
- * `pkg/lightning/runtime/engine.go`).
  *
  * Per-item `idempotencyKey` scopes the SDK's retry semantics for
  * that one write; omit to let the substrate derive a per-item key
@@ -240,7 +203,6 @@ export interface ReadCurrentInput {
  * Named-args input for {@link db.expire}. The substrate operates
  * at the entity (scopeValue) level despite the SDK method being
  * named `ExpireDroplet` -- see substrate brain doc Q3 + the
- * SDKDatabase comment in `pkg/lightning/runtime/engine.go`.
  *
  * NOTE: the v0.1 stub shape had `dropletId`; that shape was
  * incorrect. The substrate's actual contract is per-entity. See
@@ -283,7 +245,7 @@ export interface UntagInput {
 // JSON-op wire shapes for ctx.db.mutate / mutateAndRead.
 //
 // These mirror the substrate's canonical codec exactly (the kinds
-// storage.DecodeJSONOps decodes in pkg/storage/json_ops.go). The
+// storage.DecodeJSONOps decodes in the RainDB Platform). The
 // wrapper does NOT re-implement the codec -- it passes these objects
 // through as-is; the host decodes + validates them. Discriminated on
 // the `kind` field.
@@ -416,7 +378,7 @@ export interface DbBinding {
     opts?: CursorPaginationOpts,
   ): Promise<DropletsPage>;
 
-  // --- LIVE since v0.2.0 (substrate commit af5e9eb) ---
+  // --- LIVE since v0.2.0 ---
   // Positional args per the goja installer. opts.first/after for
   // asc, opts.last/before for desc, plus opts.prefix narrowing.
   // Methods are typed optional (BoltContext.db is required, but
@@ -433,12 +395,12 @@ export interface DbBinding {
     opts?: CursorPaginationOpts,
   ) => Promise<SincePage>;
 
-  // --- LIVE since v0.3.0 (substrate Tier 2 commit eee3eac) ---
+  // --- LIVE since v0.3.0 (the supported runtime) ---
   //
   // Positional args per the goja installer (see
-  // `pkg/lightning/engines/goja/bindings.go::installDBBinding`).
+  // See the public binding contract in this SDK.
   // Methods are typed optional because older lightning binaries
-  // (pre-eee3eac) won't carry them; the wrapper guards with
+  // (runtime without the binding) won't carry them; the wrapper guards with
   // BindingNotInstalled, matching the v0.2 listKeys/listSince
   // pattern.
   //
@@ -776,7 +738,7 @@ export const db = {
    * Walk an index without reading droplet payloads -- the O(1)
    * firehose primitive for live feeds and paginated detail views.
    *
-   * LIVE since v0.2.0 (audit §G Gap 2; substrate commit af5e9eb).
+   * LIVE since v0.2.0 (audit §G Gap 2).
    *
    * Relay-style pagination: pass `opts.first` + `opts.after` to
    * walk ascending, or `opts.last` + `opts.before` to walk
@@ -787,7 +749,7 @@ export const db = {
    * @requires capability: `list` on the formation
    * @throws CapabilityDenied
    * @throws BindingNotInstalled when running against a lightning
-   *   binary that pre-dates phoenix commit af5e9eb
+   *   runtime without this binding
    *
    * @example Asc walk with paging
    * ```ts
@@ -808,12 +770,7 @@ export const db = {
     const ctx = resolveCtx();
     if (typeof ctx.db.listKeys !== 'function') {
       throw new BindingNotInstalled(
-        `${BINDING.db_listKeys} requires ctx.db.listKeys which is not ` +
-          `installed in this bolt runtime. The @raindb/bolt-sdk wrapper ` +
-          `is LIVE since v0.2.0; the substrate-side binding landed in ` +
-          `phoenix commit af5e9eb. See ` +
-          `raindb-prime pkg/lightning/engines/goja/bindings.go ` +
-          `for the gap card that owns this surface.`,
+        `${BINDING.db_listKeys} is not installed in this bolt runtime. Check the operation's availability and required capabilities.`,
         { binding: BINDING.db_listKeys, input },
       );
     }
@@ -837,7 +794,7 @@ export const db = {
    * primitive: returns the next page of droplets following
    * `sinceCursor`. Pass empty string for "from the beginning."
    *
-   * LIVE since v0.2.0 (audit §G Gap 2; substrate commit af5e9eb).
+   * LIVE since v0.2.0 (audit §G Gap 2).
    *
    * Unlike {@link listKeys}, this returns FULL droplet payloads
    * (the substrate's projection is `[]map[string]any` per
@@ -851,7 +808,7 @@ export const db = {
    * @requires capability: `list` on the formation
    * @throws CapabilityDenied
    * @throws BindingNotInstalled when running against a lightning
-   *   binary that pre-dates phoenix commit af5e9eb
+   *   runtime without this binding
    *
    * @example
    * ```ts
@@ -868,12 +825,7 @@ export const db = {
     const ctx = resolveCtx();
     if (typeof ctx.db.listSince !== 'function') {
       throw new BindingNotInstalled(
-        `${BINDING.db_listSince} requires ctx.db.listSince which is not ` +
-          `installed in this bolt runtime. The @raindb/bolt-sdk wrapper ` +
-          `is LIVE since v0.2.0; the substrate-side binding landed in ` +
-          `phoenix commit af5e9eb. See ` +
-          `raindb-prime pkg/lightning/engines/goja/bindings.go ` +
-          `for the gap card that owns this surface.`,
+        `${BINDING.db_listSince} is not installed in this bolt runtime. Check the operation's availability and required capabilities.`,
         { binding: BINDING.db_listSince, input },
       );
     }
@@ -898,14 +850,14 @@ export const db = {
    * input remain untouched. Tags drive S3 lifecycle policies and
    * the vector index's filter inputs.
    *
-   * LIVE since v0.3.0 (audit §L Gap 7; substrate commit eee3eac).
+   * LIVE since v0.3.0 (audit §L Gap 7).
    *
    * @requires capability: `tag` on the formation (NEW canonical op,
    *   distinct from `write` -- a bolt with droplet-write access may
    *   not need tag-mutation access and vice versa).
    * @throws CapabilityDenied
    * @throws BindingNotInstalled when running against a lightning
-   *   binary that pre-dates phoenix commit eee3eac
+   *   runtime without this binding
    *
    * @example
    * ```ts
@@ -920,12 +872,7 @@ export const db = {
     const ctx = resolveCtx();
     if (typeof ctx.db.tag !== 'function') {
       throw new BindingNotInstalled(
-        `${BINDING.db_tag} requires ctx.db.tag which is not ` +
-          `installed in this bolt runtime. The @raindb/bolt-sdk wrapper ` +
-          `is LIVE since v0.3.0; the substrate-side binding landed in ` +
-          `phoenix commit eee3eac. See ` +
-          `raindb-prime pkg/lightning/engines/goja/bindings.go ` +
-          `for the gap card that owns this surface.`,
+        `${BINDING.db_tag} is not installed in this bolt runtime. Check the operation's availability and required capabilities.`,
         { binding: BINDING.db_tag, input },
       );
     }
@@ -943,11 +890,11 @@ export const db = {
    * Remove the named tag KEYS from an entity. Idempotent --
    * removing a key that wasn't tagged is not an error.
    *
-   * LIVE since v0.3.0 (audit §L Gap 7; substrate commit eee3eac).
+   * LIVE since v0.3.0 (audit §L Gap 7).
    *
    * @requires capability: `tag` on the formation
    * @throws CapabilityDenied
-   * @throws BindingNotInstalled on pre-eee3eac runtime
+   * @throws BindingNotInstalled on runtime without the binding
    *
    * @example
    * ```ts
@@ -962,12 +909,7 @@ export const db = {
     const ctx = resolveCtx();
     if (typeof ctx.db.untag !== 'function') {
       throw new BindingNotInstalled(
-        `${BINDING.db_untag} requires ctx.db.untag which is not ` +
-          `installed in this bolt runtime. The @raindb/bolt-sdk wrapper ` +
-          `is LIVE since v0.3.0; the substrate-side binding landed in ` +
-          `phoenix commit eee3eac. See ` +
-          `raindb-prime pkg/lightning/engines/goja/bindings.go ` +
-          `for the gap card that owns this surface.`,
+        `${BINDING.db_untag} is not installed in this bolt runtime. Check the operation's availability and required capabilities.`,
         { binding: BINDING.db_untag, input },
       );
     }
@@ -987,7 +929,7 @@ export const db = {
    * reality; see substrate brain doc Q5). For cross-formation
    * writes, issue multiple writeBatch calls.
    *
-   * LIVE since v0.3.0 (audit §I Gap 4; substrate commit eee3eac).
+   * LIVE since v0.3.0 (audit §I Gap 4).
    *
    * Per-item `idempotencyKey` scopes individual retry semantics;
    * the batch-level `opts.idempotencyKey` claims the whole batch
@@ -1001,7 +943,7 @@ export const db = {
    *   per-item formation overrides are NOT supported (the SDK's
    *   `WriteBatch` signature does not support them).
    * @throws CapabilityDenied when `write` is not declared
-   * @throws BindingNotInstalled on pre-eee3eac runtime
+   * @throws BindingNotInstalled on runtime without the binding
    *
    * @example
    * ```ts
@@ -1024,12 +966,7 @@ export const db = {
     const ctx = resolveCtx();
     if (typeof ctx.db.writeBatch !== 'function') {
       throw new BindingNotInstalled(
-        `${BINDING.db_writeBatch} requires ctx.db.writeBatch which is not ` +
-          `installed in this bolt runtime. The @raindb/bolt-sdk wrapper ` +
-          `is LIVE since v0.3.0; the substrate-side binding landed in ` +
-          `phoenix commit eee3eac. See ` +
-          `raindb-prime pkg/lightning/engines/goja/bindings.go ` +
-          `for the gap card that owns this surface.`,
+        `${BINDING.db_writeBatch} is not installed in this bolt runtime. Check the operation's availability and required capabilities.`,
         { binding: BINDING.db_writeBatch, input },
       );
     }
@@ -1107,7 +1044,7 @@ export const db = {
    * entries for that entity are marked for cleanup; the vector
    * cleanup cascades.
    *
-   * LIVE since v0.3.0 (audit §M Gap 8; substrate commit eee3eac).
+   * LIVE since v0.3.0 (audit §M Gap 8).
    *
    * Destructive -- a separate capability op from `write` per
    * audit §M: expiration cascades destructively and SHOULD NOT be
@@ -1122,7 +1059,7 @@ export const db = {
    *
    * @requires capability: `expire` on the formation
    * @throws CapabilityDenied
-   * @throws BindingNotInstalled on pre-eee3eac runtime
+   * @throws BindingNotInstalled on runtime without the binding
    *
    * @example
    * ```ts
@@ -1133,12 +1070,7 @@ export const db = {
     const ctx = resolveCtx();
     if (typeof ctx.db.expire !== 'function') {
       throw new BindingNotInstalled(
-        `${BINDING.db_expire} requires ctx.db.expire which is not ` +
-          `installed in this bolt runtime. The @raindb/bolt-sdk wrapper ` +
-          `is LIVE since v0.3.0; the substrate-side binding landed in ` +
-          `phoenix commit eee3eac. See ` +
-          `raindb-prime pkg/lightning/engines/goja/bindings.go ` +
-          `for the gap card that owns this surface.`,
+        `${BINDING.db_expire} is not installed in this bolt runtime. Check the operation's availability and required capabilities.`,
         { binding: BINDING.db_expire, input },
       );
     }
@@ -1156,7 +1088,7 @@ export const db = {
    * Read the tenant-wide retention window (in days). Surfaces the
    * SDK's `Client.ExpirationDays()` accessor.
    *
-   * LIVE since v0.3.0 (audit §M Gap 8; substrate commit eee3eac).
+   * LIVE since v0.3.0 (audit §M Gap 8).
    *
    * Takes NO arguments -- the value is tenant-wide, not per
    * formation/scope (per substrate brain doc Q4). The v0.1 stub
@@ -1166,7 +1098,7 @@ export const db = {
    *
    * No capability gate (the value is metadata, not data).
    *
-   * @throws BindingNotInstalled on pre-eee3eac runtime
+   * @throws BindingNotInstalled on runtime without the binding
    *
    * @example
    * ```ts
@@ -1178,12 +1110,7 @@ export const db = {
     const ctx = resolveCtx();
     if (typeof ctx.db.expirationDays !== 'function') {
       throw new BindingNotInstalled(
-        `${BINDING.db_expirationDays} requires ctx.db.expirationDays ` +
-          `which is not installed in this bolt runtime. The ` +
-          `@raindb/bolt-sdk wrapper is LIVE since v0.3.0; the ` +
-          `substrate-side binding landed in phoenix commit eee3eac. See ` +
-          `raindb-prime pkg/lightning/engines/goja/bindings.go ` +
-          `for the gap card that owns this surface.`,
+        `${BINDING.db_expirationDays} is not installed in this bolt runtime. Check the operation's availability and required capabilities.`,
         { binding: BINDING.db_expirationDays },
       );
     }
@@ -1234,12 +1161,7 @@ export const db = {
     const ctx = resolveCtx();
     if (typeof ctx.db.mutate !== 'function') {
       throw new BindingNotInstalled(
-        `${BINDING.db_mutate} requires ctx.db.mutate which is not ` +
-          `installed in this bolt runtime. The @raindb/bolt-sdk wrapper ` +
-          `is LIVE since v0.5.0; the substrate-side binding is installed ` +
-          `by raindb-prime pkg/lightning/engines/goja/bindings.go ` +
-          `(and internal/lightning/podchannel for the pod engine). ` +
-          `Redeploy the bolt against a lightning runtime that ships it.`,
+        `${BINDING.db_mutate} is not installed in this bolt runtime. Check the operation's availability and required capabilities.`,
         { binding: BINDING.db_mutate, input },
       );
     }
@@ -1260,7 +1182,7 @@ export const db = {
    * a `windowIncrement` op with a read of the count path to bump a
    * monthly quota and learn the new total in a single call, with the
    * window passively resetting when it rolls over -- no cron. Mirrors
-   * the substrate's fleet rate-limiter (pkg/sdk/fleet_ratelimit.go).
+   * the substrate's fleet rate-limiter (the RainDB Platform).
    *
    * LIVE. Backed by sdk.Client.MutateAndRead.
    *
@@ -1296,12 +1218,7 @@ export const db = {
     const ctx = resolveCtx();
     if (typeof ctx.db.mutateAndRead !== 'function') {
       throw new BindingNotInstalled(
-        `${BINDING.db_mutateAndRead} requires ctx.db.mutateAndRead which ` +
-          `is not installed in this bolt runtime. The @raindb/bolt-sdk ` +
-          `wrapper is LIVE since v0.5.0; the substrate-side binding is ` +
-          `installed by raindb-prime pkg/lightning/engines/goja/bindings.go ` +
-          `(and internal/lightning/podchannel for the pod engine). ` +
-          `Redeploy the bolt against a lightning runtime that ships it.`,
+        `${BINDING.db_mutateAndRead} is not installed in this bolt runtime. Check the operation's availability and required capabilities.`,
         { binding: BINDING.db_mutateAndRead, input },
       );
     }
@@ -1349,12 +1266,7 @@ export const db = {
     const ctx = resolveCtx();
     if (typeof ctx.db.writeToken !== 'function') {
       throw new BindingNotInstalled(
-        `${BINDING.db_writeToken} requires ctx.db.writeToken which is not ` +
-          `installed in this bolt runtime. The @raindb/bolt-sdk wrapper ` +
-          `is LIVE since v0.5.0; the substrate-side binding is installed ` +
-          `by raindb-prime pkg/lightning/engines/goja/bindings.go ` +
-          `(and internal/lightning/podchannel for the pod engine). ` +
-          `Redeploy the bolt against a lightning runtime that ships it.`,
+        `${BINDING.db_writeToken} is not installed in this bolt runtime. Check the operation's availability and required capabilities.`,
         { binding: BINDING.db_writeToken, input },
       );
     }

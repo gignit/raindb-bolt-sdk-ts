@@ -5,7 +5,7 @@
 //   - ctx.db.mutateAndRead(formationId, scopeValue, ops, readPaths)
 //   - ctx.db.writeToken(formationId, payload)
 //
-// Substrate installer: pkg/lightning/engines/goja/bindings.go::
+// See the public binding contract in this SDK.
 // installDBBinding. Capability gate (host-side): OpMutate ("mutate")
 // for mutate/mutateAndRead, OpTokenWrite ("token-write") for writeToken.
 //

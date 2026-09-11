@@ -1,14 +1,4 @@
 // bindings/relay.ts -- STUBBED ctx.relay.* surface.
-//
-// CONTRACT-UNCERTAIN per handoff §C: relay's capability-op design
-// (relay-write vs relay-read vs status-update) and the queue-vs-non-
-// queue distinction need a substrate-side requirements card. Optional/
-// required field distinctions on RelayDetails may shift. The shapes
-// declared here are best-effort projections of the @raindb/agent
-// shape and the Go-side `pkg/sdk/relay.go`.
-//
-// TODO(substrate-card-J): tighten optional/required after the
-// substrate-side requirements card lands. Audit §J (Gap 5).
 
 import { resolveCtx } from '../runtime/ctx-resolver.js';
 import { stubOrDispatch } from '../runtime/binding-not-installed.js';

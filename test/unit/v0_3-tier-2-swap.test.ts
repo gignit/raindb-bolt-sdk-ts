@@ -1,10 +1,10 @@
 // test/unit/v0_3-tier-2-swap.test.ts -- unit tests for the four
 // stubs that were swapped to LIVE in v0.3.0:
 //
-//   - ctx.db.{tag,untag}                   (substrate commit eee3eac)
-//   - ctx.db.{expire,expirationDays}       (substrate commit eee3eac)
-//   - ctx.db.writeBatch                    (substrate commit eee3eac)
-//   - ctx.schedule                         (substrate commit f934956)
+//   - ctx.db.{tag,untag}
+//   - ctx.db.{expire,expirationDays}
+//   - ctx.db.writeBatch
+//   - ctx.schedule
 //
 // Per handoff §L acceptance: each newly-LIVE binding gets
 //   (1) a happy-path test (mock substrate returns expected shape;
@@ -41,7 +41,7 @@ beforeEach(() => {
 });
 
 // ============================================================
-// ctx.db.tag (audit §L Gap 7; substrate commit eee3eac)
+// ctx.db.tag (audit §L Gap 7)
 // ============================================================
 
 test('db.tag forwards (formationId, scopeValue, tags) positionally', async () => {
@@ -102,7 +102,7 @@ test('db.tag translates capability denial to CapabilityDenied', async () => {
   );
 });
 
-test('db.tag throws BindingNotInstalled on pre-eee3eac runtime', async () => {
+test('db.tag throws BindingNotInstalled on runtime without the binding', async () => {
   setCtx(mockCtx()); // default mockCtx omits db.tag
   await assert.rejects(
     () =>
@@ -110,14 +110,14 @@ test('db.tag throws BindingNotInstalled on pre-eee3eac runtime', async () => {
     (e: unknown) => {
       assert.ok(e instanceof BindingNotInstalled);
       assert.match((e as Error).message, /ctx\.db\.tag/);
-      assert.match((e as Error).message, /eee3eac/);
+      assert.match((e as Error).message, /Check the operation's availability and required capabilities/);
       return true;
     },
   );
 });
 
 // ============================================================
-// ctx.db.untag (audit §L Gap 7; substrate commit eee3eac)
+// ctx.db.untag (audit §L Gap 7)
 // ============================================================
 
 test('db.untag forwards (formationId, scopeValue, tagKeys) positionally', async () => {
@@ -177,7 +177,7 @@ test('db.untag translates capability denial', async () => {
   );
 });
 
-test('db.untag throws BindingNotInstalled on pre-eee3eac runtime', async () => {
+test('db.untag throws BindingNotInstalled on runtime without the binding', async () => {
   setCtx(mockCtx());
   await assert.rejects(
     () =>
@@ -185,7 +185,7 @@ test('db.untag throws BindingNotInstalled on pre-eee3eac runtime', async () => {
     (e: unknown) => {
       assert.ok(e instanceof BindingNotInstalled);
       assert.match((e as Error).message, /ctx\.db\.untag/);
-      assert.match((e as Error).message, /eee3eac/);
+      assert.match((e as Error).message, /Check the operation's availability and required capabilities/);
       return true;
     },
   );
@@ -251,7 +251,7 @@ test('tags.replaceTags stays STUBBED (no substrate binding)', async () => {
 });
 
 // ============================================================
-// ctx.db.expire (audit §M Gap 8; substrate commit eee3eac)
+// ctx.db.expire (audit §M Gap 8)
 // ============================================================
 
 test('db.expire forwards (formationId, scopeValue) positionally', async () => {
@@ -301,21 +301,21 @@ test('db.expire translates capability denial to CapabilityDenied with op="expire
   );
 });
 
-test('db.expire throws BindingNotInstalled on pre-eee3eac runtime', async () => {
+test('db.expire throws BindingNotInstalled on runtime without the binding', async () => {
   setCtx(mockCtx());
   await assert.rejects(
     () => db.expire({ formationId: 'f', scopeValue: 's' }),
     (e: unknown) => {
       assert.ok(e instanceof BindingNotInstalled);
       assert.match((e as Error).message, /ctx\.db\.expire/);
-      assert.match((e as Error).message, /eee3eac/);
+      assert.match((e as Error).message, /Check the operation's availability and required capabilities/);
       return true;
     },
   );
 });
 
 // ============================================================
-// ctx.db.expirationDays (audit §M Gap 8; substrate commit eee3eac)
+// ctx.db.expirationDays (audit §M Gap 8)
 // ============================================================
 
 test('db.expirationDays takes no args and returns number (sync substrate value)', async () => {
@@ -357,21 +357,21 @@ test('db.expirationDays returns 0 when no retention rule is configured', async (
   assert.equal(await db.expirationDays(), 0);
 });
 
-test('db.expirationDays throws BindingNotInstalled on pre-eee3eac runtime', async () => {
+test('db.expirationDays throws BindingNotInstalled on runtime without the binding', async () => {
   setCtx(mockCtx());
   await assert.rejects(
     () => db.expirationDays(),
     (e: unknown) => {
       assert.ok(e instanceof BindingNotInstalled);
       assert.match((e as Error).message, /ctx\.db\.expirationDays/);
-      assert.match((e as Error).message, /eee3eac/);
+      assert.match((e as Error).message, /Check the operation's availability and required capabilities/);
       return true;
     },
   );
 });
 
 // ============================================================
-// ctx.db.writeBatch (audit §I Gap 4; substrate commit eee3eac)
+// ctx.db.writeBatch (audit §I Gap 4)
 // ============================================================
 
 test('db.writeBatch forwards (formationId, items, opts) and projects result shape', async () => {
@@ -512,7 +512,7 @@ test('db.writeBatch translates capability denial to CapabilityDenied with op="wr
   );
 });
 
-test('db.writeBatch throws BindingNotInstalled on pre-eee3eac runtime', async () => {
+test('db.writeBatch throws BindingNotInstalled on runtime without the binding', async () => {
   setCtx(mockCtx());
   await assert.rejects(
     () =>
@@ -523,14 +523,14 @@ test('db.writeBatch throws BindingNotInstalled on pre-eee3eac runtime', async ()
     (e: unknown) => {
       assert.ok(e instanceof BindingNotInstalled);
       assert.match((e as Error).message, /ctx\.db\.writeBatch/);
-      assert.match((e as Error).message, /eee3eac/);
+      assert.match((e as Error).message, /Check the operation's availability and required capabilities/);
       return true;
     },
   );
 });
 
 // ============================================================
-// ctx.schedule (Wave 2.5; substrate commit f934956)
+// ctx.schedule (Wave 2.5)
 // ============================================================
 
 test('schedule.schedule forwards (formationId, runAfterMs, actionRef, payload) and returns event key', async () => {
@@ -616,7 +616,7 @@ test('schedule.schedule surfaces substrate capability-denial as RainDBBoltError 
   );
 });
 
-test('schedule.schedule throws BindingNotInstalled when ctx.schedule absent (pre-f934956)', async () => {
+test('schedule.schedule throws BindingNotInstalled when ctx.schedule absent (runtime without the binding)', async () => {
   setCtx(mockCtx()); // default mockCtx omits schedule
   await assert.rejects(
     () =>
@@ -628,7 +628,7 @@ test('schedule.schedule throws BindingNotInstalled when ctx.schedule absent (pre
     (e: unknown) => {
       assert.ok(e instanceof BindingNotInstalled);
       assert.match((e as Error).message, /ctx\.schedule/);
-      assert.match((e as Error).message, /f934956/);
+      assert.match((e as Error).message, /Check the operation's availability and required capabilities/);
       assert.match(
         (e as Error).message,
         /capabilities\.raindb\.schedule/,

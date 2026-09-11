@@ -1,12 +1,4 @@
 // bindings/crypto.ts -- typed wrapper for ctx.crypto.*.
-//
-// LIVE binding (audit §B). Three methods: hashPassword, verifyPassword,
-// randomBytes. Maps onto
-// `pkg/lightning/engines/goja/bindings.go::installCryptoBinding`.
-//
-// Goja's verifyPassword returns true/false (not throw) per the
-// installer; we preserve that behavior. The substrate's
-// HashPassword/VerifyPassword route through bcrypt.
 
 import { resolveCtx } from '../runtime/ctx-resolver.js';
 import { translateBindingError } from '../errors/from-binding.js';

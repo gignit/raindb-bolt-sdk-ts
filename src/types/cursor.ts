@@ -1,6 +1,4 @@
 // types/cursor.ts -- pagination shapes shared by listKeys, listSince,
-// catalog.list, etc. The Relay-shape (`first/after`/`last/before`)
-// matches the substrate-side cursor protocol per audit §G.
 
 /**
  * Relay-style cursor pagination options.

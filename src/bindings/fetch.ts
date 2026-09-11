@@ -1,21 +1,4 @@
 // bindings/fetch.ts -- typed wrapper for ctx.fetch.
-//
-// LIVE binding (audit §B). Maps onto
-// `pkg/lightning/engines/goja/bindings.go::installFetchBinding`.
-// The goja-side response shape:
-//   { status: number, ok: boolean, headers: object, body: string,
-//     text(): string, json(): unknown }
-//
-// The goja binding is a callable, not a namespace -- the wrapper
-// exposes a callable function `fetch(url, init?)` returning a typed
-// FetchResponse.
-//
-// Note on egress allowlisting (per substrate
-// `pkg/lightning/runtime/engine.go::SDKFetch.Do`): host MUST be in
-// the bolt manifest's capabilities.network.egress[]. Calls to
-// non-allowlisted hosts reject with a substrate-side error; the
-// wrapper surfaces that as a generic RainDBBoltError because there's
-// no typed-name discriminator for it (yet).
 
 import { resolveCtx } from '../runtime/ctx-resolver.js';
 import { translateBindingError } from '../errors/from-binding.js';

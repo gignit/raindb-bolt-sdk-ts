@@ -1,39 +1,4 @@
 // bindings/tags.ts -- ergonomic ctx.tags.* surface.
-//
-// Per audit §L (Gap 7), the original stub assumed a separate
-// `ctx.tags` goja namespace. The substrate-side Tier 2 work
-// (commit eee3eac) instead installed `ctx.db.tag` /
-// `ctx.db.untag` on the existing db namespace. There is NO
-// substrate-side `ctx.tags` namespace today.
-//
-// To preserve the v0.1 ergonomic surface (`tags.tag(...)`) while
-// honoring the substrate's actual contract, the wrappers here
-// route through the LIVE `db.tag` / `db.untag` wrappers. Bolts
-// can use either import:
-//
-//   import { tags } from '@raindb/bolt-sdk';
-//   await tags.tag('agent-graph', 'a-1', { env: 'prod' });
-//
-//   // equivalent
-//   import { db } from '@raindb/bolt-sdk';
-//   await db.tag({ formationId: 'agent-graph', scopeValue: 'a-1', tags: { env: 'prod' } });
-//
-// Wave 3A shape divergences from v0.1 stubs (per CHANGELOG):
-//
-// 1. `tag` argument type is now `Record<string, string>`, NOT
-//    `string[]`. The substrate's tag store is S3-tag-shaped
-//    (key=value pairs).
-//
-// 2. `untag` takes a `string[]` of tag KEY names to remove (not
-//    values). The v0.1 stub used the same `string[]` parameter
-//    for both, which couldn't distinguish add-keys from remove-keys.
-//
-// 3. `replaceTags` stays STUBBED -- the substrate did not ship
-//    a native replaceTags binding (the SDK has TagEntity additive
-//    and UntagEntity key-removal but no atomic replace). The stub
-//    throws BindingNotInstalled with a hint that bolts emulate
-//    it client-side via untag(oldKeys) + tag(newTags) when
-//    non-atomic replace is acceptable.
 
 import { db, type TagInput, type UntagInput } from './db.js';
 import { resolveCtx } from '../runtime/ctx-resolver.js';
@@ -94,11 +59,11 @@ export const tags = {
    * Add tag key=value pairs to an entity (additive).
    *
    * LIVE since v0.3.0 (routes through `db.tag`, which routes
-   * through the substrate's `ctx.db.tag` -- commit eee3eac).
+   * through the substrate's `ctx.db.tag`).
    *
    * @requires capability: `tag` on the formation
    * @throws CapabilityDenied
-   * @throws BindingNotInstalled on pre-eee3eac runtime
+   * @throws BindingNotInstalled on runtime without the binding
    */
   async tag(
     formationId: string,
@@ -113,11 +78,11 @@ export const tags = {
    * Remove tag KEYS from an entity. Idempotent.
    *
    * LIVE since v0.3.0 (routes through `db.untag`, which routes
-   * through the substrate's `ctx.db.untag` -- commit eee3eac).
+   * through the substrate's `ctx.db.untag`).
    *
    * @requires capability: `tag` on the formation
    * @throws CapabilityDenied
-   * @throws BindingNotInstalled on pre-eee3eac runtime
+   * @throws BindingNotInstalled on runtime without the binding
    */
   async untag(
     formationId: string,

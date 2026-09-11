@@ -1,5 +1,5 @@
 // test/unit/v0_2-tier-1-swap.test.ts -- unit tests for the four
-// stubs that were swapped to LIVE in v0.2.0 (substrate commit af5e9eb):
+// stubs that were swapped to LIVE in v0.2.0:
 //
 //   - ctx.objects.{get,put,exists,delete}
 //   - ctx.sql.query
@@ -37,7 +37,7 @@ beforeEach(() => {
 });
 
 // ============================================================
-// ctx.objects.* (audit §F Gap 1; substrate commit af5e9eb)
+// ctx.objects.* (audit §F Gap 1)
 // ============================================================
 
 test('objects.get forwards (bucket, key) and returns string payload', async () => {
@@ -101,9 +101,9 @@ test('objects.get throws BindingNotInstalled when ctx.objects absent', async () 
       assert.ok(e instanceof BindingNotInstalled);
       assert.match(
         (e as Error).message,
-        /ctx\.objects\.get.*ctx\.objects which is not installed/,
+        /ctx\.objects\.get is not installed in this bolt runtime/,
       );
-      assert.match((e as Error).message, /af5e9eb/);
+      assert.match((e as Error).message, /Check the operation's availability and required capabilities/);
       return true;
     },
   );
@@ -215,7 +215,7 @@ test('objects.delete throws BindingNotInstalled when ctx.objects absent', async 
 });
 
 // ============================================================
-// ctx.sql.query (audit §H Gap 3; substrate commit af5e9eb)
+// ctx.sql.query (audit §H Gap 3)
 // ============================================================
 
 test('sql.query forwards (sql, opts) and returns named (column-keyed) rows', async () => {
@@ -389,8 +389,8 @@ test('sql.query throws BindingNotInstalled when ctx.sql absent', async () => {
     () => sql.query({ sql: 'SELECT 1' }),
     (e: unknown) => {
       assert.ok(e instanceof BindingNotInstalled);
-      assert.match((e as Error).message, /ctx\.sql which is not installed/);
-      assert.match((e as Error).message, /af5e9eb/);
+      assert.match((e as Error).message, /ctx\.sql\.query is not installed in this bolt runtime/);
+      assert.match((e as Error).message, /Check the operation's availability and required capabilities/);
       assert.match((e as Error).message, /sqlRead/);
       return true;
     },
@@ -398,7 +398,7 @@ test('sql.query throws BindingNotInstalled when ctx.sql absent', async () => {
 });
 
 // ============================================================
-// ctx.db.listKeys (audit §G Gap 2; substrate commit af5e9eb)
+// ctx.db.listKeys (audit §G Gap 2)
 // ============================================================
 
 test('db.listKeys forwards (formationId, indexId, opts) positionally', async () => {
@@ -495,7 +495,7 @@ test('db.listKeys translates capability denial', async () => {
 // which omits listKeys -- exercising the version-skew path.)
 
 // ============================================================
-// ctx.db.listSince (audit §G Gap 2; substrate commit af5e9eb)
+// ctx.db.listSince (audit §G Gap 2)
 // ============================================================
 
 test('db.listSince forwards (formationId, sinceCursor, opts) and returns SincePage', async () => {
@@ -588,14 +588,14 @@ test('db.listSince translates capability denial', async () => {
   );
 });
 
-test('db.listSince throws BindingNotInstalled on pre-af5e9eb runtime', async () => {
+test('db.listSince throws BindingNotInstalled on runtime without the binding', async () => {
   setCtx(mockCtx()); // omits listSince
   await assert.rejects(
     () => db.listSince({ formationId: 'f', sinceCursor: '' }),
     (e: unknown) => {
       assert.ok(e instanceof BindingNotInstalled);
       assert.match((e as Error).message, /ctx\.db\.listSince/);
-      assert.match((e as Error).message, /af5e9eb/);
+      assert.match((e as Error).message, /Check the operation's availability and required capabilities/);
       return true;
     },
   );

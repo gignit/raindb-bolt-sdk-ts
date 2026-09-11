@@ -294,12 +294,9 @@ droplet (capability op: `token-write`).
 | `flows`        | `queryState`                                                                                     |
 | `tags`         | `replaceTags` -- no native atomic replace; emulate via `db.untag` + `db.tag`                    |
 
-A STUB binding throws `BindingNotInstalled` at runtime until the
-substrate ships it. Your code compiles; deployment requires the
-native binding to be present. The native binding installers live in
-`raindb-prime pkg/lightning/engines/goja/bindings.go` (goja) and
-`internal/lightning/podchannel` (pod); the code is the source of truth
-for which bindings are LIVE.
+A STUB binding throws `BindingNotInstalled` when the runtime does not provide
+it. A TypeScript declaration alone does not establish runtime availability.
+Consult the supported bindings and required capabilities before using an operation.
 
 Not every wrapper is native-or-STUB. Some are **GraphQL-backed** (they
 call a real GraphQL op through `ctx.fetch`, not a native binding, so
@@ -626,7 +623,7 @@ while (true) {
 
 `EventSource` works too -- but it only supports GET, and many SSE
 chat endpoints are POST (the request carries the prompt). The
-`fetch` + `getReader` pattern above is what `joshua-vs-wopr` and
+`fetch` + `getReader` pattern above is suitable for
 `fdn-app` ship.
 
 ### Verifying SSE wired correctly
@@ -778,7 +775,7 @@ export async function onHttpRequest(ctx, req) {
   }
 
   // ctx.auth.tenantId is the USER's tenant (where their data lives).
-  // For a portal bolt hosted on platform-bolts serving Joshua on chess,
+  // For a portal bolt serving a user from another tenant,
   // ctx.auth.tenantId === chess. The bolt's host tenant lives on
   // ctx.bolt.tenantId.
   const userTenantId = ctx.auth!.tenantId;
@@ -829,7 +826,7 @@ return { status: 200, body: { wireToken } };
 ```
 
 The browser opens an `EventSource` to
-`https://api.<env>.raindb.gignit.com/sse?token=<rgr1.*>` and the
+`https://<your-api-endpoint>/sse?token=<rgr1.*>` and the
 SSE gateway pushes a wakeup every time the matching chain-head
 S3 object changes. The mint is gated by the same 3-rule check
 (`wire-key:subscribe` OR `formation:read` OR `tenant:admin`) your
@@ -838,62 +835,11 @@ keys their grant authorizes.
 
 ### Layer 4: cross-tenant SaaS portal patterns
 
-If you're building a SaaS like fdn-app or raindb-app -- a bolt
-hosted on `platform-bolts` that serves users from MANY downstream
-tenants -- you mint per-user grants targeting each downstream
-tenant. The pattern (executed via raindb-api's `mintScopedGrant`
-mutation):
-
-```typescript
-// 1. User logs in via /api/auth/login (bolt-owned username/password)
-// 2. Bolt fetches the user's chosen tenant from the platform-tenant
-//    user record (raindb-app's authentication staircase pattern)
-// 3. Bolt calls raindb-api's mintScopedGrant via ctx.fetch with the
-//    bolt's host credential as the parent grant:
-
-const mintRes = await ctx.fetch({
-  method: 'POST',
-  url:    `${ctx.secrets.get('platform-api-endpoint')}/graphql`,
-  headers: {
-    'authorization': `Bearer ${platformBoltsCredential}`,
-    'content-type':  'application/json',
-  },
-  body: JSON.stringify({
-    query: 'mutation($input: MintScopedGrantInput!) { mintScopedGrant(input: $input) { token jti } }',
-    variables: {
-      input: {
-        targetTenantId:      pickedTenantId,
-        subject:             userId,
-        subjectConstraint:   'SOURCE_IDENTITY_BOUND',
-        resources: [{ type: 'tenant', id: pickedTenantId, ops: ['read', 'write'] }],
-        ttlSec:              86400,
-      },
-    },
-  }),
-});
-
-// 4. Store the minted grant in the bolt's session (formation-backed)
-// 5. Every subsequent request from this user uses the picked-tenant
-//    grant -- ctx.auth.tenantId now shows the user's tenant, NOT the
-//    bolt's host tenant
-```
-
-The canonical authentication-staircase pattern (login -> workspace ->
-group -> tenant -> portal-enter) plus the SaaS-on-RainDB user-table
-shape is published as the **`raindb/user-auth-email`** pack on the
-marketplace -- a `usageIntent: "reference"` pack you can install on
-your own tenant as a starting point:
-
-```bash
-raindb-cli --profile <yours> pack info raindb/user-auth-email
-raindb-cli --profile <yours> pack get  raindb/user-auth-email > /tmp/pack.json
-# install onto a tenant at create time:
-raindb-admin --profile <admin> tenant create --name=my-saas \
-    --additional-packs=raindb/tenant-base,raindb/foundation,raindb/user-auth-email
-```
-
-See [Marketplace inventory](#marketplace-inventory) below for the full
-list of packs and which apply to which use cases.
+A portal may serve users from more than one tenant. Its deployment tenant and
+the authenticated user's tenant are separate identities. Use `ctx.auth` for the
+current user's identity and permissions; do not authorize a user from the bolt's
+deployment identity. Access to another tenant requires an explicitly authorized
+grant. A bolt does not gain administrator access merely by acting as a portal.
 
 ### Recap: pick the right layer
 
@@ -1037,7 +983,7 @@ bolt/formations/app-users/
 
 The most productive dev loop for a bolt with a frontend is to keep
 the React app on `localhost` (Vite HMR) while pointing every API call
-at the **already-deployed** bolt on devx/devz. No local server, no
+at the **already-deployed** bolt on your tenant. No local server, no
 local key, no env file -- the live bolt holds its own secrets and
 serves real data.
 
@@ -1112,145 +1058,31 @@ npm run build       # produces dist/
 npm pack            # produces a tarball with dist/, README.md, CHANGELOG.md only
 ```
 
-The `test/integration/example-bolt/` directory is the canonical
-"smallest complete bolt using @raindb/bolt-sdk" reference. It
-compiles cleanly under the same TypeScript strictness the package
-uses (`exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`, full
-strict mode). To run its e2e suite against devz, set
-`RAINDB_DEVZ_PROFILE=<profile-name>` and run `npm run test:e2e` from
-the bolt's directory; without that env var the suite skips cleanly.
+Local unit and shape tests use an in-memory context and declared dependencies.
+They require no private platform source, operator profile, or deployed fixture.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the standalone checks.
+
+`test/integration/example-bolt/` contains example application source. Run its
+own `npm run typecheck` separately; the root lint command covers SDK source and
+unit tests. It is not a deployed integration suite. Running the example requires
+your own tenant configuration and capabilities.
 
 ---
 
 ## Marketplace inventory
 
-Every formation declaration, data-model template, and authoring
-pattern your bolt builds on top of is published as a **marketplace
-pack**. Browse with `raindb-cli pack list`; install onto a tenant
-with `raindb-admin tenant create --additional-packs <vendor>/<pack>`
-at create time, or via the `POST /api/marketplace/install`
-endpoint after the tenant exists.
-
-The on-disk authoring source for every `raindb`-vendored pack is
-`~/src/raindb-base/vendors/raindb/packs/<pack>/` -- each pack ships
-its own `README.md`, the formation declarations under `formations/`,
-and (where applicable) a `*PATTERNS.md` or `TROUBLESHOOTING.md`
-guide. Read those when you're designing a feature similar to what
-the pack already covers.
-
-Each pack carries a `usageIntent` field that signals its role:
-
-| `usageIntent`   | Meaning                                                                         |
-|-----------------|---------------------------------------------------------------------------------|
-| `production`    | **SYSTEM PACK.** The platform installs or expects this. Treat as built-in.     |
-| `example`       | **EXAMPLE PACK.** Drop-in worked example for a domain. Copy, adapt, fork.      |
-| `reference`     | **REFERENCE PACK.** Canonical implementation of a pattern (e.g. email auth).    |
-| `pattern`       | **PATTERN GUIDE.** Documentation pack -- read it, don't install it.            |
-| `experimental`  | Active development; API may change between minor versions.                      |
-
-### System packs (`usageIntent: "production"`)
-
-These ship with the platform. Your tenant has most of them by
-default; the rest install at tenant-create time via the realm's
-`defaultTenantBlueprint.packs[]`. Don't fork them; just consume.
-
-| Pack | What it gives you |
-|---|---|
-| `raindb/core` | The platform-realm + env config + bridge-machinery formations the substrate itself runs on. Includes `platform-marketplace-{pack,vendor,credential}` (the marketplace catalog) and the realm-blueprint formations. |
-| `raindb/platform-runtime` | Genesis provisioner config + AWS environment binding. Realm-genesis-level wiring. |
-| `raindb/platform-services` | Cyclone / scheduler / wire / cache shared service formations -- the infrastructure your bolt rides on. |
-| `raindb/tenant-base` | Per-tenant infrastructure: `lightning-secrets`, `lightning-bolts`, `lightning-bolt-stats`. Every tenant has these. Your bolt uses these to store secrets + register itself. |
-| `raindb/lightning` | Platform-side bolt deployment formations. The dispatcher reads from these to route requests to your bolt. |
-| `raindb/foundation` | The full document-RAG stack: `fdn-documents`, `fdn-chunks`, `fdn-embeddings`, `fdn-projects`, `fdn-folders`, `fdn-chat-sessions`, `fdn-chat-messages`, `fdn-coworkers`, `fdn-memberships`. Install this when your bolt does RAG over user-uploaded documents. Depends on `raindb/tenant-base`. |
-
-### Example packs (`usageIntent: "example"`)
-
-Domain-shaped starter formations you can install on a fresh tenant
-and customize. The pack's `README.md` walks through the data model;
-the `formations/` directory has the declarations.
-
-| Pack | Domain | What's inside |
-|---|---|---|
-| `raindb/social` | Chat + social patterns | `direct-message`, `direct-message-conversation`, `live-chat-conversation`, `live-chat-message`, `user-profile`, `post`, `comment`, `reaction`, `friendship`. Read `CHAT_PATTERNS.md` for the asc/desc/poll cursor pattern and `TROUBLESHOOTING.md` for the bugs the reference build surfaced (empty bubbles, duplicate keys, mid-stream content clobbering, etc). |
-| `raindb/media-photos` | Photo + album with binary float pipeline | Reference for the float pipeline + image-asset lifecycle. |
-| `raindb/finance-transactions` | Ledger | Multi-index transaction formation (`by-account`, `by-status`, `by-date`) with the parquet view cache pattern. |
-| `raindb/real-estate-listings` | MLS-shaped listings | Property + property-image formations, multi-index (`by-id`, `by-owner`, `by-status`, `by-state`). |
-
-### Reference packs (`usageIntent: "reference"`)
-
-Canonical implementations of common features. Install as-is for the
-behaviour, or copy the pattern into your own formation.
-
-| Pack | Pattern |
-|---|---|
-| `raindb/user-auth-email` | Email + password user identity. The canonical username/password authentication pattern (Layer 1 IAM in this README). Secret-field handling for the password hash + indexed credential lookup. Install when you want a SaaS-on-RainDB user table. |
-
-### Pattern guides (`usageIntent: "pattern"`)
-
-Documentation packs. Don't install; read.
-
-| Pack | Topic |
-|---|---|
-| `raindb/guide-patterns` | The canonical RainDB design-patterns guide. Dual-UUID write contract, S3 key layout, access tier hierarchy, formation config (indexes / floats / flows / funnels), write/read patterns at all four tiers, denormalization, S3-first probing, immutable documents, digest pipeline, enrichment modes. **Read this first when designing a new formation.** |
-
-### Discovering packs
-
-```bash
-# List the full catalog (your env's marketplace tenant returns
-# whatever has been seeded into platform-marketplace-pack).
-raindb-cli --profile <yours> pack list
-
-# Filter by usageIntent:
-raindb-cli --profile <yours> pack list --usage-intent=example
-raindb-cli --profile <yours> pack list --usage-intent=production
-
-# Filter by category:
-raindb-cli --profile <yours> pack list --category=social
-raindb-cli --profile <yours> pack list --category=system
-
-# Search by tag / description / title:
-raindb-cli --profile <yours> pack list --search="auth"
-
-# Detail view of one pack (with README + features + files):
-raindb-cli --profile <yours> pack info raindb/foundation
-raindb-cli --profile <yours> pack get  raindb/foundation > /tmp/foundation.json
-```
-
-The on-disk authoring sources for every `raindb`-vendored pack live
-under `~/src/raindb-base/vendors/raindb/packs/<pack>/`. Each pack
-ships its own `README.md` (the human guide), `formations/<fid>/`
-(the declarations the marketplace install publishes onto your
-tenant), and where relevant a `*PATTERNS.md` / `TROUBLESHOOTING.md`
-companion.
-
----
+Use `raindb-cli pack list` to discover available application packs and
+`raindb-cli pack info <vendor>/<pack>` to inspect a pack. Follow the pack's
+published tenant instructions and declared capabilities. SDK development does
+not require marketplace source repositories or platform administrator tools.
 
 ## See also
 
-- [`@raindb/agent`](../raindb-agent-ts/README.md) -- LLM agent loop +
-  tool catalog. Sister package; this README's LLM section is a quick
-  start, the agent README is the full guide.
-- `~/src/raindb-base/README.md` -- the marketplace authoring source
-  (vendor + pack publishing model, the seeding pipeline, formation
-  publish vs pack publish vs marketplace install).
-- `~/src/raindb-base/vendors/raindb/packs/guide-patterns/` -- the
-  canonical RainDB design-patterns guide. Read this BEFORE designing
-  your own formation.
-- `~/src/raindb-base/vendors/raindb/packs/<pack>/README.md` -- the
-  per-pack guide for every pack in the table above. The `social`,
-  `foundation`, and `user-auth-email` READMEs are especially worth
-  reading as a bolt author.
-- Reference bolts (public starter repos):
-  - `github.com/gignit/joshua-vs-wopr` -- minimal LLM bolt: chess +
-    chat, SSE streaming, ~700 LOC. Best read first.
-  - `github.com/gignit/super-calculator` -- streaming agent UI +
-    multi-tool LLM loop.
-  - `github.com/gignit/fdn-app` -- production RAG: documents,
-    multi-project, multi-user, agent + tool calls, full SPA.
-
----
+- [Contributing](CONTRIBUTING.md): independently runnable local checks.
+- [SDK reference](BOLT_SDK_REFERENCE.md): public binding and result conventions.
+- [Changelog](CHANGELOG.md): SDK changes.
 
 ## License
 
-Internal (private package). Public license TBD when the package goes
-public.
+License terms are to be specified by the package owner. The SDK is intended
+for RainDB application authors; this document does not grant a license.

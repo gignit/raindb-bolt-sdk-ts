@@ -14,9 +14,8 @@
  * One droplet revision -- the canonical RainDB content unit.
  *
  * Mirrors @raindb/agent's `DropletResult` (see
- * `~/src/raindb-agent-ts/src/tools/droplet.ts`) field-for-field so
  * the two surfaces are interchangeable. The substrate side's
- * canonical Go shape is `internal/ops/droplet.go::DropletResult`.
+ * canonical Go shape is the RainDB Platform::DropletResult`.
  *
  * @see DropletEnvelope for the wrapper type carrying the optional
  *   `pointerETag` from a write/read result.
@@ -156,7 +155,6 @@ export interface KeyPage {
  * because listSince returns full droplet payloads (the substrate's
  * `ListSincePage.Droplets` is `[]map[string]any`, projected as
  * full droplets to the JS side per
- * `pkg/lightning/engines/goja/bindings.go::listSincePageToJS`).
  *
  * Added in v0.2.0. The v0.1 stub typed listSince as `KeyPage` --
  * that was incorrect; this is a shape divergence resolved in favor
@@ -173,7 +171,6 @@ export interface SincePage {
  * under-a-formation primitive with Relay-style cursor pagination.
  * Mirrors {@link SincePage}; the substrate's `ListDropletsPage` is
  * projected to JS by
- * `pkg/lightning/engines/goja/bindings.go::listDropletsPageToJS`.
  *
  * Added when listDroplets gained pagination (substrate H12 fix). The
  * prior wrapper returned a bare `Droplet[]` and could only ever see the

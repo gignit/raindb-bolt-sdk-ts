@@ -1,5 +1,4 @@
 // bindings/formations.ts -- STUBBED ctx.formations.* surface.
-// Audit §Q (Gap 12).
 
 import { resolveCtx } from '../runtime/ctx-resolver.js';
 import { stubOrDispatch } from '../runtime/binding-not-installed.js';

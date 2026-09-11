@@ -1,7 +1,4 @@
 // bindings/cookies.ts -- typed wrapper for ctx.cookies.{parse,build}.
-//
-// LIVE binding (audit §B). Maps onto
-// `pkg/lightning/engines/goja/bindings.go::installCookiesBinding`.
 
 import { resolveCtx } from '../runtime/ctx-resolver.js';
 import { translateBindingError } from '../errors/from-binding.js';
@@ -9,7 +6,6 @@ import { BINDING } from '../internal/constants.js';
 
 /**
  * Cookie attribute options for `cookies.build`. Matches
- * `pkg/lightning/runtime/engine.go::CookieOptions` field-for-field.
  */
 export interface CookieOptions {
   path?: string;

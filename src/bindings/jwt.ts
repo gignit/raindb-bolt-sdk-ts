@@ -1,8 +1,4 @@
 // bindings/jwt.ts -- typed wrapper for ctx.jwt.{sign,verify}.
-//
-// LIVE binding (audit §B). HMAC-signed JWTs. Symmetric secret comes
-// from the bolt's secrets capability (the secretName must be in
-// capabilities.raindb.secrets.names).
 
 import { resolveCtx } from '../runtime/ctx-resolver.js';
 import { translateBindingError } from '../errors/from-binding.js';

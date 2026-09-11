@@ -1,5 +1,4 @@
 // bindings/actions.ts -- STUBBED ctx.actions.* surface.
-// Audit §K (Gap 6).
 
 import { resolveCtx } from '../runtime/ctx-resolver.js';
 import { stubOrDispatch } from '../runtime/binding-not-installed.js';

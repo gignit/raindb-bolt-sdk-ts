@@ -2,10 +2,6 @@
  * @raindb/bolt-sdk -- typed bindings over the goja sandbox for
  * Lightning Bolt handler authors. Zero runtime overhead.
  *
- * @see ~/src/raindb-prime/pkg/lightning -- the substrate bolt runtime:
- *   binding installers (pkg/lightning/engines/goja/bindings.go), the
- *   runtime SDK interface (pkg/lightning/runtime/engine.go), and the
- *   pod-engine dispatch (internal/lightning/podchannel). The code is
  *   the source of truth for which bindings are LIVE.
  *
  * This file is the public API. Internals under `src/internal/` are
@@ -36,11 +32,11 @@ export { jwt } from './bindings/jwt.js';
 export { crypto } from './bindings/crypto.js';
 export { cookies } from './bindings/cookies.js';
 export { iam } from './bindings/iam.js';
-// --- LIVE since v0.4.0 (substrate commit 7bf58b6 -- unified IAM gate) ---
+// --- LIVE since v0.4.0 (the supported runtime -- unified IAM gate) ---
 export { auth } from './bindings/auth.js';
 export { response, startSSE, sseFrame } from './bindings/response.js';
 
-// --- LIVE since v0.3.0 (substrate Wave 2.5 commit f934956) ---
+// --- LIVE since v0.3.0 ---
 export { schedule } from './bindings/schedule.js';
 
 // --- STUBBED (audit §F-§S; substrate-side pending) ---
@@ -53,7 +49,7 @@ export { actions } from './bindings/actions.js';
 /**
  * tags namespace -- {@link tags.tag} and {@link tags.untag} are
  * LIVE since v0.3.0 (route through `ctx.db.tag` / `ctx.db.untag`,
- * substrate commit eee3eac). {@link tags.replaceTags} stays STUB
+ * the supported runtime). {@link tags.replaceTags} stays STUB
  * (substrate did not ship an atomic replace binding -- emulate
  * via untag + tag when non-atomic is acceptable).
  */
