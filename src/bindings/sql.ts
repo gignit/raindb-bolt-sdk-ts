@@ -396,8 +396,13 @@ export const sql = {
    * for ordered/filtered/limited current lists, sort+filter+slice the result
    * yourself over stable columns, or await the platform bounded-current mode.
    *
-   * FAIL-LOUD: if the tail harvest errors, this THROWS -- it never silently returns
-   * the stale snapshot (a method named `*Fresh` must not hand back stale data).
+   * FAIL-LOUD: this THROWS -- never silently returns the stale snapshot (a method
+   * named `*Fresh` must not hand back stale data) -- when (a) the tail harvest
+   * errors, (b) a bookmark is UNAVAILABLE (no by-update index -> nothing to
+   * harvest, freshness cannot be established), (c) a BEHIND/UNKNOWN bookmark
+   * carries no snapshot cursor (coverage unprovable), or (d) no merge key can be
+   * established (a merge would double-count/drop rows). It returns the base
+   * snapshot ONLY when every bookmark is genuinely CURRENT (nothing to harvest).
    *
    * @param input.scopeKey the entity-identity column both the SQL rows and the late
    *   droplet payloads carry (e.g. `entryId`); used to dedupe the merge. Defaults
@@ -425,6 +430,25 @@ export const sql = {
   ): Promise<SqlResult> {
     const base = await this.query({ ...input, withFreshness: true });
     const bookmarks = base.latest ?? [];
+
+    // FAIL LOUD on a bookmark this helper cannot honestly freshen (R3). A
+    // method named *Fresh must never silently hand back the stale snapshot:
+    //   - UNAVAILABLE: the formation declares no by-update index, so there is
+    //     no tail to harvest and freshness cannot be established. This is NOT a
+    //     "nothing to do => return base" case; it is "cannot fulfil the *Fresh
+    //     contract" => reject, so the caller uses plain query() knowingly.
+    const unavailable = bookmarks.filter((bm) => bm.freshnessStatus === 'UNAVAILABLE');
+    if (unavailable.length > 0) {
+      throw new RainDBBoltError(
+        `sql.queryEntityRowsFresh: cannot freshen -- ${unavailable
+          .map((b) => b.formationId)
+          .join(', ')} report freshnessStatus=UNAVAILABLE (no by-update index; ` +
+          `no harvestable tail). Use sql.query() for an honest eventual read, ` +
+          `or add a by-update index to the formation.`,
+        { binding: 'ctx.sql.queryEntityRowsFresh', input: { sql: input.sql.slice(0, 80) } },
+      );
+    }
+
     const behind = bookmarks.filter((bm) => needsHarvest(bm));
     if (behind.length === 0) return base;
 
@@ -432,11 +456,33 @@ export const sql = {
       ? base.columns
       : Object.keys(base.rows[0] ?? {});
     const key = input.scopeKey ?? cols[0];
-    if (!key) return base; // no columns to key on -- nothing to merge
+    if (!key) {
+      // Cannot establish merge identity: a harvested late row could not be
+      // deduped against a snapshot row, so a merge would double-count or drop
+      // rows. Reject rather than silently return the stale base (R3).
+      throw new RainDBBoltError(
+        'sql.queryEntityRowsFresh: cannot establish a merge key (no columns and ' +
+          'no scopeKey supplied); pass scopeKey or select at least the identity ' +
+          'column so late rows can dedupe against the snapshot.',
+        { binding: 'ctx.sql.queryEntityRowsFresh', input: { sql: input.sql.slice(0, 80) } },
+      );
+    }
 
     // Harvest the not-yet-pooled tail for each behind formation (fail-loud).
     const late: Array<Record<string, unknown>> = [];
     for (const bm of behind) {
+      // A BEHIND/UNKNOWN bookmark that carries no snapshot cursor cannot be
+      // harvested from a known point -- freshness coverage is unprovable, so
+      // reject rather than harvest from "" (which would re-read the whole
+      // formation and still not prove coverage) (R3).
+      if (!bm.snapshotDropletId) {
+        throw new RainDBBoltError(
+          `sql.queryEntityRowsFresh: ${bm.formationId} is ${bm.freshnessStatus} ` +
+            `but carries no snapshot cursor; cannot harvest a bounded tail or ` +
+            `prove freshness coverage.`,
+          { binding: 'ctx.sql.queryEntityRowsFresh', input: { formationId: bm.formationId } },
+        );
+      }
       let cursor = bm.snapshotDropletId;
       // Walk pages from the snapshot cursor forward until caught up.
       for (;;) {

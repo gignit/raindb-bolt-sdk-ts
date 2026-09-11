@@ -36,7 +36,8 @@ import type { BoltContext } from '../types/bolt-context.js';
 import type { CursorPaginationOpts } from '../types/cursor.js';
 import { db } from '../bindings/db.js';
 import { sql } from '../bindings/sql.js';
-import type { SqlQueryInput } from '../bindings/sql.js';
+import type { SqlQueryInput, PlanStrategy } from '../bindings/sql.js';
+import type { KeyPage } from '../types/droplet.js';
 import { setCtx } from '../runtime/ctx-resolver.js';
 
 // ---------------------------------------------------------------------
@@ -345,13 +346,19 @@ async function tryRouteToNative(
       const formationId = String(input['formationId'] ?? '');
       const indexId = String(input['indexId'] ?? input['indexName'] ?? '');
       if (!formationId || !indexId) return undefined;
-      // Forward the cursor-pagination fields the NATIVE listKeys binding
-      // actually accepts -- `first/after/last/before/prefix`
-      // (runtime.ListPageOptions / handleDBListKeys). Descending paging is
-      // `last`+`before`, NOT an `orderByDesc` flag: the prior allowlist
-      // forwarded a non-existent `orderByDesc` and DROPPED `last`/`before`,
-      // so a descending page request silently paged ascending. Match the
-      // binding contract, not the assumed GraphQL shape.
+      // The native listKeys binding (runtime.ListPageOptions / handleDBListKeys)
+      // accepts first/after/last/before/prefix ONLY -- it has no maxKeys
+      // accumulation target. The GraphQL ListKeysInput DOES declare maxKeys and
+      // the resolver honors it. Rather than silently DROP a supplied maxKeys
+      // (reducing the requested semantics, which this interception must not do),
+      // fall through to ctx.fetch so the real GraphQL route serves it. Same for
+      // pageSize/cursor -- native uses first/after, so a caller using the
+      // GraphQL-only paging fields gets the authorized GraphQL route.
+      for (const unsupported of ['maxKeys', 'pageSize', 'cursor']) {
+        if (input[unsupported] !== undefined) return undefined;
+      }
+      // Descending paging is last+before (NOT an orderByDesc flag). Match the
+      // native binding contract.
       const opts: Record<string, unknown> = {};
       for (const k of ['first', 'after', 'last', 'before', 'prefix']) {
         if (input[k] !== undefined) opts[k] = input[k];
@@ -361,7 +368,14 @@ async function tryRouteToNative(
         indexId,
         opts: opts as never,
       });
-      return { data: { listKeys: page } };
+      // The native KeyEntry.lastModified is an RFC3339 STRING (goja/pod host
+      // boundary); the GraphQL KeyEntry.lastModified is Time! -- a Unix-ms
+      // NUMBER (model.MarshalTime). Since we are answering a GRAPHQL operation
+      // to the agent, project the string to the GraphQL number shape so a
+      // consumer decoding the result sees the wire type it expects. Returning
+      // the native page unchanged would hand a string where the contract says a
+      // number. A malformed/absent timestamp becomes null (never a silent 0).
+      return { data: { listKeys: keyPageToGraphQL(page) } };
     }
 
     case 'executeSQL': {
@@ -369,9 +383,14 @@ async function tryRouteToNative(
       if (!sqlText) return undefined;
       // Forward EVERY option the SQLInput wire contract carries, not just the
       // SQL text + withFreshness: formationId (prelude scoping + freshness
-      // bookmark), timeoutMs, and planStrategy (range/scan). Dropping them here
-      // silently discarded a caller's explicit planner choice / formation hint.
-      // Defined-only so an omitted option stays the host default.
+      // bookmark), timeoutMs, and planStrategy. Dropping them here silently
+      // discarded a caller's explicit planner choice / formation hint.
+      // Forward each option when PRESENT (defined + non-null), verbatim -- an
+      // omitted option stays the host default; a PRESENT-but-invalid value is
+      // forwarded to the host validator (ValidatePlanStrategy) so it is rejected
+      // loud (bad_request), never silently converted to omission (PR 5.3). The
+      // agent's GraphQL variables are untyped JSON, so we cannot assume the
+      // union holds; the host is the authority.
       const sqlInput: SqlQueryInput = { sql: sqlText };
       if (typeof input['formationId'] === 'string') {
         sqlInput.formationId = input['formationId'];
@@ -379,8 +398,11 @@ async function tryRouteToNative(
       if (typeof input['timeoutMs'] === 'number') {
         sqlInput.timeoutMs = input['timeoutMs'];
       }
-      if (input['planStrategy'] === 'range' || input['planStrategy'] === 'scan') {
-        sqlInput.planStrategy = input['planStrategy'];
+      if (input['planStrategy'] !== undefined && input['planStrategy'] !== null) {
+        // Cast through the typed union: the value is caller-supplied JSON, so it
+        // may be an invalid string. Forwarding it lets the host reject it rather
+        // than the JS silently discarding the explicit choice.
+        sqlInput.planStrategy = input['planStrategy'] as PlanStrategy;
       }
       sqlInput.withFreshness = input['withFreshness'] === true;
       const out = await sql.query(sqlInput);
@@ -421,6 +443,54 @@ async function tryRouteToNative(
     default:
       return undefined;
   }
+}
+
+/**
+ * Project a native listKeys page onto the GraphQL KeyPage wire shape for the
+ * agent interception boundary. The ONLY transform is KeyEntry.lastModified:
+ * the native binding emits an RFC3339 STRING (the intentional goja/pod host
+ * boundary -- see the compat lock + prime 8f77cf15), but the GraphQL contract
+ * is Time! -- a Unix-MILLISECOND NUMBER (model.MarshalTime). Since this
+ * intercepts a GraphQL operation and answers as GraphQL, a consumer decoding
+ * the result must see the number, not the string. A malformed/empty timestamp
+ * becomes null (never a silent 0). Every other field passes through unchanged.
+ * NOTE: this does NOT change the native ctx.db.listKeys binding's shape -- that
+ * stays a string; only the GraphQL-answering agent path converts.
+ */
+function keyPageToGraphQL(page: KeyPage): {
+  keys: Array<{
+    key: string;
+    size: number;
+    lastModified: number | null;
+    etag?: string;
+  }>;
+  nextCursor?: string | null;
+  hasMore: boolean;
+  totalCount: number;
+} {
+  const keys = page.keys.map((k) => {
+    const ms = k.lastModified ? Date.parse(k.lastModified) : NaN;
+    const entry: {
+      key: string;
+      size: number;
+      lastModified: number | null;
+      etag?: string;
+    } = {
+      key: k.key,
+      size: k.size,
+      lastModified: Number.isFinite(ms) ? ms : null,
+    };
+    if (k.etag !== undefined) entry.etag = k.etag;
+    return entry;
+  });
+  const out: {
+    keys: typeof keys;
+    nextCursor?: string | null;
+    hasMore: boolean;
+    totalCount: number;
+  } = { keys, hasMore: page.hasMore, totalCount: page.totalCount };
+  if (page.nextCursor !== undefined) out.nextCursor = page.nextCursor;
+  return out;
 }
 
 /**

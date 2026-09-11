@@ -10,17 +10,35 @@ upstreams:
     # for BOTH engines (see live_validation below), not just a coder claim.
     live_validation:
       command: "raindb-test-lightning-goja scripts/run-matrix.sh --profile core.prod.platform-bolts"
+      # Distinguish the coordinates (peer-review R6): reconciled_source is the
+      # prime commit this SDK was reconciled against; deployed_api_binary is the
+      # ACTUAL host binary the matrix ran against (built from the branch before
+      # the doc/anchor commits, so a different sha -- functionally identical, but
+      # NOT the same coordinate); configured_pod_image is the seed-pinned digest.
+      reconciled_source: raindb-prime@cb445642
+      deployed_api_binary: raindb-prime@b0b413d272e59ef19930c1c936b7f72c2e0ca766
+      configured_pod_image: 0b00b1961c6fa130ced9801c7cb4ecfd52c4688719f5737f60de41dd4c4304f8
       proof: >-
-        Parity matrix against the deployed goja host (raindb-prime@cb445642) AND
-        the freshly-rolled nodejs-20 pod image (imageId 0b00b196): the three
-        reconciliation probes -- sql.planStrategy(range==scan), db.writeToken
-        .scopeValue, db.listDroplets.scopeValue -- are ok|ok|SAME on both engines;
-        goja=48 ok, pod=48 ok, IDENTICAL; zero engine divergences. This is the
-        real-engine executable proof the goja-only coder lock lacked.
+        Parity matrix against the DEPLOYED goja host binary
+        (raindb-prime@b0b413d2, /version-confirmed) AND the freshly-rolled
+        nodejs-20 pod image (imageId 0b00b196): the three reconciliation probes
+        -- sql.planStrategy(range==scan), db.writeToken.scopeValue,
+        db.listDroplets.scopeValue -- are ok|ok|SAME on both engines; goja=48 ok,
+        pod=48 ok, IDENTICAL; zero engine divergences. Also verified in-browser
+        (chrome-devtools) on both dashboards. This is the real-engine executable
+        proof the earlier goja-only coder lock lacked; it SUPERSEDES the
+        "POD-engine shape parity is NOT verified / followup-F pending" note in
+        the historical `validation` block below (retained only as history).
       reconciled_shas:
         - raindb-prime@cb445642
         - raindb-lightning-pods@a3d1d4a
+        - raindb-bolt-sdk-ts@cae6620
         - raindb-test-lightning-goja@a5ba8f1
+    # HISTORICAL (superseded by live_validation above). This block records the
+    # earlier goja-only coder reconciliation at reconciled_sha 5a7a2177; its
+    # "POD-engine shape parity is NOT verified / followup-F pending" caveats are
+    # NO LONGER the current verdict -- the live two-engine matrix above closed
+    # them. Kept for provenance/audit, not as a simultaneous current claim.
     validation:
       command: "coder_go_* re-verification of the goja-host boundary + boundary-source diff (peer-reviewed by an independent claude agent, 119 coder tool calls)"
       # BOUNDARY-SOURCE GUARD (widened after peer review): this SDK's Droplet
