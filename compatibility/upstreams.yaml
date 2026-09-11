@@ -12,28 +12,40 @@ upstreams:
       command: "raindb-test-lightning-goja scripts/run-matrix.sh --profile core.prod.platform-bolts"
       # Distinguish the coordinates (peer-review R6): reconciled_source is the
       # prime commit this SDK was reconciled against; deployed_api_binary is the
-      # ACTUAL host binary the matrix ran against (built from the branch before
-      # the doc/anchor commits, so a different sha -- functionally identical, but
-      # NOT the same coordinate); configured_pod_image is the seed-pinned digest.
-      reconciled_source: raindb-prime@cb445642
-      deployed_api_binary: raindb-prime@b0b413d272e59ef19930c1c936b7f72c2e0ca766
-      configured_pod_image: 0b00b1961c6fa130ced9801c7cb4ecfd52c4688719f5737f60de41dd4c4304f8
+      # ACTUAL host binary the matrix ran against (a different sha than the source
+      # HEAD -- functionally identical, but NOT the same coordinate);
+      # configured_pod_image is the seed-pinned digest AND the digest the host has
+      # pulled + runs (verified read-only via `podman images`).
+      # UPDATED 2026-09-11 after the peer-review Follow-up A-C remediation +
+      # Follow-up D pod re-roll. Superseded coordinates preserved in the comment
+      # trail below; the current proven set is here.
+      reconciled_source: raindb-prime@40803eaa
+      deployed_api_binary: raindb-prime@61b40c4b68fd38860ee5b5a681c5812edce93f32
+      configured_pod_image: 7eab6bc068e66d189cba5fce8e2314e1026104fb3d2ecfffe65111565406d9b4
+      running_pod_image: 7eab6bc068e66d189cba5fce8e2314e1026104fb3d2ecfffe65111565406d9b4
       proof: >-
         Parity matrix against the DEPLOYED goja host binary
-        (raindb-prime@b0b413d2, /version-confirmed) AND the freshly-rolled
-        nodejs-20 pod image (imageId 0b00b196): the three reconciliation probes
-        -- sql.planStrategy(range==scan), db.writeToken.scopeValue,
-        db.listDroplets.scopeValue -- are ok|ok|SAME on both engines; goja=48 ok,
-        pod=48 ok, IDENTICAL; zero engine divergences. Also verified in-browser
-        (chrome-devtools) on both dashboards. This is the real-engine executable
-        proof the earlier goja-only coder lock lacked; it SUPERSEDES the
-        "POD-engine shape parity is NOT verified / followup-F pending" note in
-        the historical `validation` block below (retained only as history).
+        (raindb-prime@61b40c4b, /version-confirmed) AND the rolled nodejs-20 pod
+        image (imageId 7eab6bc0, host-pulled -- podman images shows the digest):
+        every reconciliation probe is ok|ok|SAME on both engines --
+        sql.planStrategy(range==scan) incl. the invalid-planStrategy host-reject,
+        db.writeToken.scopeValue, db.writeToken.autoGenScopeValue (G5's token
+        emitter proven on the TOKEN path via the sdktest-autotoken autoGenId token
+        formation, not a droplet), db.writeDroplet.autoGenScopeValue, and
+        db.listDroplets.scopeValue across a REAL page boundary; goja=50 ok,
+        pod=50 ok, IDENTICAL; zero engine divergences. The peer-review correctness
+        fixes are guarded by fast deterministic unit tests (SDK npm test 154; pod
+        node --test 9). The self-contained tests/live re-proof was evaluated and
+        deliberately NOT built (it would duplicate the matrix + unit coverage with
+        no added resilience -- see the bolt.sdk_pods_reconcile anchor evaluation in
+        raindb-prime tests/live/configs/refactors.yaml). Prior proven coordinates:
+        deployed_api b0b413d2 / pod 0b00b196 / 48-48 / 3 probes (the earlier run).
       reconciled_shas:
-        - raindb-prime@cb445642
-        - raindb-lightning-pods@a3d1d4a
-        - raindb-bolt-sdk-ts@cae6620
-        - raindb-test-lightning-goja@a5ba8f1
+        - raindb-prime@40803eaa
+        - raindb-lightning-pods@77fe13e
+        - raindb-bolt-sdk-ts@9674658
+        - raindb-test-lightning-goja@a6f482d
+      anchor: "raindb-prime tests/live/configs/refactors.yaml bolt.sdk_pods_reconcile (status: complete; both stubs proven/self)"
     # HISTORICAL (superseded by live_validation above). This block records the
     # earlier goja-only coder reconciliation at reconciled_sha 5a7a2177; its
     # "POD-engine shape parity is NOT verified / followup-F pending" caveats are
