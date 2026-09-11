@@ -1,14 +1,4 @@
 // handlers/object-roundtrip.ts -- exercises objects.put + objects.get
-// + objects.exists + objects.delete. LIVE since v0.2.0 (substrate
-// commit af5e9eb).
-//
-// Demonstrates the full S3-style roundtrip: write a payload, read
-// it back, verify the body matches, optionally clean up.
-//
-// Capability: bolt.json must declare a `capabilities.raindb.buckets`
-// entry naming the target bucket with both object-read and
-// object-write ops. The example-bolt's bolt.json declares
-// `tenant-standard` for this purpose.
 
 import { objects, log, ids, CapabilityDenied, BindingNotInstalled } from '@raindb/bolt-sdk';
 import type { BoltContext, BoltRequest, BoltResponse } from '@raindb/bolt-sdk';
@@ -68,7 +58,7 @@ export async function onObjectRoundtrip(
         status: 501,
         body: {
           error: 'ctx.objects not installed on this lightning binary',
-          hint: 'requires substrate >= phoenix commit af5e9eb',
+          hint: 'requires a runtime providing this binding',
         },
       };
     }

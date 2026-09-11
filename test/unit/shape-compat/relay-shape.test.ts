@@ -10,7 +10,7 @@ import type {
 } from '../../../src/index.js';
 
 // Mirrors of @raindb/agent v0.6.0 from
-// ~/src/raindb-agent-ts/src/tools/relay.ts.
+// See the public binding contract in this SDK.
 
 interface AgentRelayAddress {
   formationId: string;

@@ -1,17 +1,4 @@
 // handlers/schedule-callback.ts -- exercises ctx.schedule. LIVE since
-// v0.3.0 (substrate commit f934956; Wave 2.5 actions precursor).
-//
-// Demonstrates the deferred-callback surface:
-//   1. enqueue a bolt-callback that fires 60 seconds in the future
-//   2. capture the substrate-minted event key (S3 key) for future
-//      cancellation (cancellation API is a v0.2 substrate follow-up)
-//   3. surface the event key + target ts in the response
-//
-// Capability: bolt-level, NOT formation-scoped. The manifest declares
-// `capabilities.raindb.schedule: true` (single boolean opt-in).
-// Denials surface as plain RainDBBoltError because the substrate's
-// denial format is bolt-level and does NOT match the
-// formation-shape CAPABILITY_DENIAL_REGEX.
 
 import {
   schedule,
@@ -72,7 +59,7 @@ export async function onScheduleCallback(
         body: {
           error: 'ctx.schedule not installed on this lightning binary',
           hint:
-            'requires substrate >= phoenix Wave 2.5 (commit f934956) AND ' +
+            'requires a runtime providing this binding AND ' +
             '`capabilities.raindb.schedule: true` in bolt.json',
         },
       };

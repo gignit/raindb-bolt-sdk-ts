@@ -10,7 +10,7 @@
 // We declare the agent-ts shapes locally rather than `import`ing
 // from `@raindb/agent` because the agent is an OPTIONAL peer dep
 // and may not be installed. The shapes are copied verbatim from
-// `~/src/raindb-agent-ts/src/tools/droplet.ts`. When the agent's
+// See the public binding contract in this SDK.
 // shapes change in a way that should be reflected here, this file
 // updates and the bolt-sdk's types update with it.
 
@@ -27,7 +27,7 @@ import type {
 
 // ---------------------------------------------------------------------
 // Local mirrors of @raindb/agent v0.6.0 shapes (from
-// ~/src/raindb-agent-ts/src/tools/droplet.ts). Update when the agent
+// See the public binding contract in this SDK.
 // updates.
 // ---------------------------------------------------------------------
 

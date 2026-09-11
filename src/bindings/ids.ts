@@ -1,7 +1,4 @@
 // bindings/ids.ts -- typed wrapper for ctx.ids.uuidv7.
-//
-// LIVE binding (audit §B). Synchronous on the goja side; the wrapper
-// returns a value (not a promise) for parity.
 
 import { resolveCtx } from '../runtime/ctx-resolver.js';
 

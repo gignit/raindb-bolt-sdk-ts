@@ -1,16 +1,4 @@
 // types/relay.ts -- relay-shaped types for the STUBBED ctx.relay surface.
-//
-// Per handoff §C: relay is one of the THREE contract-uncertain surfaces
-// (the others are vectors and catalog). The shapes here are the
-// best-guess projection of the substrate-side `pkg/sdk.RelayResult`
-// and friends (`sdk/relay.go`). When the substrate-side requirements
-// card resolves the optional/required field distinctions, the shapes
-// tighten and the package bumps minor version.
-//
-// Cross-validation reference: matches @raindb/agent's `RelayResult`,
-// `RelayLogEntry`, `RelayAddress` so the agent-bridge can route a
-// `relay_inspect` GraphQL call to `ctx.relay.read` with the same
-// projection.
 
 /**
  * The address that uniquely identifies a relay. Mirrors

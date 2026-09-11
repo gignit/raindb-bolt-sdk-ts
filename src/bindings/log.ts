@@ -1,14 +1,4 @@
 // bindings/log.ts -- typed wrapper over ctx.log.{info,warn,error}.
-//
-// LIVE binding (audit §B). Maps directly onto the goja installer in
-// `pkg/lightning/engines/goja/bindings.go::installLogBinding` which
-// dispatches to `runtime.SDKLogger`.
-//
-// The goja-side accepts `(msg, ...fields)` where each field is an
-// arbitrary value. We type fields as `Record<string, unknown>` for
-// the most common case (structured logging) plus `unknown[]` for
-// ad-hoc varargs -- the goja side accepts both because Export()
-// produces map[string]any or []any indifferently.
 
 import { resolveCtx } from '../runtime/ctx-resolver.js';
 

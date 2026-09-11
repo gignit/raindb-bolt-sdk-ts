@@ -1,15 +1,4 @@
 // runtime/binding-not-installed.ts -- the stub-vs-live discriminator.
-//
-// Per handoff §F: stubbed bindings call stubOrDispatch which checks
-// at runtime whether the goja-side binding actually exists. If it
-// does (e.g. because the substrate-side agent shipped it after this
-// package's version compiled), the stub dispatches through it. If
-// not, it throws a clearly-named BindingNotInstalled error pointing
-// at the audit gap card.
-//
-// This helper is the SINGLE point where stub-vs-live discrimination
-// happens. Every stubbed binding wrapper routes through it. No
-// scattered `if (typeof ctx.foo === 'undefined')` checks elsewhere.
 
 import { BindingNotInstalled } from '../errors/classes.js';
 import { translateBindingError } from '../errors/from-binding.js';
@@ -42,7 +31,7 @@ import { translateBindingError } from '../errors/from-binding.js';
  * stays scoped to one place.
  *
  * @param bindingName Canonical name for error.binding and the
- *   BindingNotInstalled message. Sourced from `internal/constants.ts`.
+ *   BindingNotInstalled message. Sourced from `src/internal/constants.ts`.
  * @param resolver Returns the underlying goja-side function or
  *   undefined when the binding namespace is absent.
  * @param dispatcher Calls the resolved function and returns its
@@ -66,13 +55,7 @@ export async function stubOrDispatch<T>(
   const fn = resolver();
   if (typeof fn !== 'function') {
     throw new BindingNotInstalled(
-      `${bindingName} is not installed in this bolt runtime. ` +
-        `The @raindb/bolt-sdk wrapper is shipped; the substrate-side ` +
-        `binding is pending. The native binding installers live in ` +
-        `raindb-prime pkg/lightning/engines/goja/bindings.go; a binding ` +
-        `absent there (and in internal/lightning/podchannel for the pod ` +
-        `engine) surfaces here. Redeploy the bolt against a lightning ` +
-        `runtime that ships this binding.`,
+      `${bindingName} is not installed in this bolt runtime. Check the operation's availability and required capabilities.`,
       { binding: bindingName, input },
     );
   }

@@ -40,11 +40,10 @@ test('sql.query throws BindingNotInstalled when ctx.sql is missing', async () =>
       assert.ok(e instanceof BindingNotInstalled);
       assert.match(
         (e as Error).message,
-        /ctx\.sql\.query.*ctx\.sql which is not installed/,
+        /ctx\.sql\.query is not installed in this bolt runtime/,
       );
-      // The message points at the substrate binding installers
-      // (raindb-prime), not the retired raindb-phoenix-lightning docs.
-      assert.match((e as Error).message, /raindb-prime|bindings\.go/);
+      // Diagnostics identify the unavailable public binding.
+      assert.match((e as Error).message, /not installed in this bolt runtime/);
       return true;
     },
   );
@@ -175,7 +174,7 @@ test('actions.dispatch throws BindingNotInstalled', async () => {
 test('tags.tag throws BindingNotInstalled when ctx.db.tag is missing', async () => {
   // tags.tag routes through db.tag, which requires ctx.db.tag. The
   // default mockCtx omits it (simulates a lightning binary older
-  // than phoenix commit eee3eac). The LIVE wrapper guards with
+  // than the supported runtime). The LIVE wrapper guards with
   // BindingNotInstalled rather than crashing.
   setCtx(mockCtx());
   await assert.rejects(
@@ -188,9 +187,9 @@ test('tags.tag throws BindingNotInstalled when ctx.db.tag is missing', async () 
   );
 });
 
-test('db.listKeys throws BindingNotInstalled on pre-af5e9eb runtime', async () => {
+test('db.listKeys throws BindingNotInstalled on runtime without the binding', async () => {
   // Default mockCtx omits listKeys (simulates a lightning binary
-  // older than phoenix commit af5e9eb). The v0.2 LIVE wrapper
+  // older than the supported runtime). The v0.2 LIVE wrapper
   // still guards with BindingNotInstalled rather than crashing.
   setCtx(mockCtx());
   await assert.rejects(
@@ -208,7 +207,7 @@ test('sql.query dispatches through when ctx.sql.query is present', async () => {
       // The cast is fine -- the BoltContext type has sql?: SqlBinding,
       // and we're providing one for this test. Note: rows are named
       // (column-keyed objects) per the substrate's SQLResult shape
-      // (commit 4e1b5ef: SqlResult.rows matches executeSQL named rows).
+      // (the documented contract: SqlResult.rows matches executeSQL named rows).
       sql: {
         query: async () => {
           dispatched = true;

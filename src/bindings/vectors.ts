@@ -1,14 +1,4 @@
 // bindings/vectors.ts -- STUBBED ctx.vectors.* surface.
-//
-// CONTRACT-UNCERTAIN per handoff §C: the embedding vector parameter
-// shape (Float32Array vs number[]) is not yet decided on the goja
-// side. We type as `number[]` for v0.1; when the substrate-side
-// requirements card lands (audit §N), the type may tighten to
-// Float32Array. Bolts that use number[] today continue to work
-// after the swap (Float32Array would be additive).
-//
-// TODO(substrate-card-N): tighten the vector parameter shape.
-// Audit §N (Gap 9).
 
 import { resolveCtx } from '../runtime/ctx-resolver.js';
 import { stubOrDispatch } from '../runtime/binding-not-installed.js';

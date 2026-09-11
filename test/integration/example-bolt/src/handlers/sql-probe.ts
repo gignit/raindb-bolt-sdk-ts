@@ -1,5 +1,5 @@
 // handlers/sql-probe.ts -- exercises sql.query against a trivial
-// statement. LIVE since v0.2.0 (substrate commit af5e9eb).
+// statement. LIVE since v0.2.0.
 //
 // Demonstrates the positional row shape: `result.rows` is
 // `unknown[][]` (each row is an array aligned with the `columns[]`
@@ -65,7 +65,7 @@ export async function onSqlProbe(
         status: 501,
         body: {
           error: 'ctx.sql not installed on this lightning binary',
-          hint: 'requires substrate >= phoenix commit af5e9eb',
+          hint: 'requires a runtime providing this binding',
         },
       };
     }

@@ -1,21 +1,4 @@
 // types/bolt-context.ts -- the central type contract.
-//
-// BoltContext is what every bolt handler accepts as its first
-// argument. It composes every binding namespace (LIVE today + STUBBED
-// pending). Bolts call `setCtx(ctx)` once at handler entry to register
-// the ambient context; subsequent calls into `db.*`, `token.*`, etc.
-// resolve through that ambient.
-//
-// The shape of `ctx` mirrors the goja sandbox's actual invocation
-// contract (`pkg/lightning/engines/goja/sandbox.go::Invoke` lines
-// 161-213 in the substrate repo plus `bindings.go` for each
-// installer). Don't invent fields the substrate doesn't produce.
-//
-// Per handoff §H acceptance criterion 3: optional fields for stubbed
-// namespaces use `?` so bolts can defensively check `if (ctx.token)
-// { ... }` without a runtime guard. When the substrate ships a
-// binding the type stays optional until the architect approves
-// flipping it to required (which is a major-version bump per §N).
 
 import type { DbBinding } from '../bindings/db.js';
 import type { LogBinding } from '../bindings/log.js';
@@ -49,9 +32,7 @@ import type { ScheduleBinding } from '../bindings/schedule.js';
  * on `ctx.bolt`; they're typed optional here. When the substrate
  * ships them they become required in a minor version bump.
  *
- * @see ~/src/raindb-prime/pkg/lightning/runtime/engine.go
- *   `BoltMeta` for the live shape. The four optional fields below are
- *   STUBBED pending substrate work.
+ * Optional fields may be unavailable in a runtime; check before use.
  */
 export interface BoltMeta {
   readonly id: string;
@@ -109,16 +90,13 @@ export interface BoltContext {
    * boundary via the SAME GrantValidator raindb-api's
    * auth_middleware uses.
    *
-   * LIVE since v0.4.0 (substrate commit 7bf58b6). Marked
-   * optional for backwards-compat with older lightning binaries
-   * (pre-7bf58b6 substrate did not install this); the wrapper
+   * LIVE since v0.4.0. Marked
+   * optional because the namespace can be unavailable; the wrapper
    * guards by checking `ctx.auth !== undefined` before reading
    * scalars / invoking predicates and returns the safe defaults
    * (empty strings, false) when missing.
    *
-   * See bindings/auth.ts for the surface contract +
-   * ~/src/raindb-prime/internal/lightning (unified IAM gate; resolveAuthContext)
-   * for the architecture.
+   * See bindings/auth.ts for the public surface contract.
    */
   readonly auth?: AuthBinding;
   /**
@@ -151,10 +129,9 @@ export interface BoltContext {
   readonly formations?: FormationsBinding;
   readonly flows?: FlowsBinding;
   /**
-   * LIVE since v0.3.0 (substrate Wave 2.5 commit f934956). The
+   * LIVE since v0.3.0. The
    * top-level callable enqueues a deferred bolt-callback. Marked
-   * optional for backwards-compat with older lightning binaries
-   * (pre-f934956 substrate did not install this); the wrapper
+   * optional because the namespace can be unavailable; the wrapper
    * guards with a clean BindingNotInstalled.
    */
   readonly schedule?: ScheduleBinding;
@@ -163,9 +140,7 @@ export interface BoltContext {
 /**
  * The HTTP-shaped request payload passed to handlers.
  *
- * Mirrors `pkg/lightning/runtime/engine.go::InvocationInput` (the
- * fields the goja sandbox surfaces to JS). Trigger-style invocations
- * (Cyclone-dispatched, scheduled) leave HTTP fields empty and
+ * Trigger-style invocations leave HTTP fields empty and
  * populate `trigger` instead -- see {@link BoltTriggerRequest}.
  */
 export interface BoltRequest {

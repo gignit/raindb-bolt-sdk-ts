@@ -1,5 +1,4 @@
 // bindings/flows.ts -- STUBBED ctx.flows.queryState surface.
-// Audit §R (Gap 13).
 
 import { resolveCtx } from '../runtime/ctx-resolver.js';
 import { stubOrDispatch } from '../runtime/binding-not-installed.js';

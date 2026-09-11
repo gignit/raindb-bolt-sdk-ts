@@ -1,35 +1,4 @@
 // bindings/schedule.ts -- typed wrapper for ctx.schedule.
-//
-// LIVE since v0.3.0 -- substrate landed the native binding in
-// phoenix Wave 2.5 (commit f934956; merge SHA pointed at by
-// BOLT_SDK_COORDINATION.md). The goja installer is in
-// `pkg/lightning/engines/goja/bindings.go::installScheduleBinding`;
-// the SDK contract is the `SDKSchedule` interface in
-// `pkg/lightning/runtime/engine.go`.
-//
-// Calling convention: the goja binding takes positional args
-// `(formationId, runAfterMs, actionRef, payload?)` and returns
-// the scheduled event's S3 key (string) for later cancel. The
-// wrapper exposes a named-args input to match the SDK family
-// idiom (db.* uses named-args; schedule does the same).
-//
-// Capability gating: bolt-level OpSchedule. The bolt manifest
-// declares it as `capabilities.raindb.schedule: true` (a single
-// boolean opt-in, NOT a per-formation ops entry). The denial
-// message format is
-//   `ctx.schedule: schedule capability not declared (set
-//    capabilities.raindb.schedule=true in the bolt manifest)`
-// which does NOT match the `<binding>: <op> on formation "<name>"`
-// regex; a capability denial therefore surfaces as a plain
-// RainDBBoltError carrying `binding: "ctx.schedule"` and the
-// original message verbatim. Bolts that need to discriminate can
-// `e instanceof RainDBBoltError && /schedule capability not
-// declared/.test(e.message)`.
-//
-// Audit reference: Wave 2.5 actions precursor; see research
-// analysis at
-// `~/src/continuum/docs/work/RESEARCH_ACTIONS_SYSTEM_STATE.md`
-// section 6.2.
 
 import { resolveCtx } from '../runtime/ctx-resolver.js';
 import { translateBindingError } from '../errors/from-binding.js';
@@ -100,14 +69,7 @@ export type ScheduleBinding = (
 /** Internal: shared "binding missing" error producer. */
 function missingSchedule(input: unknown): never {
   throw new BindingNotInstalled(
-    `${BINDING.schedule} requires ctx.schedule which is not installed ` +
-      `in this bolt runtime. The @raindb/bolt-sdk wrapper is LIVE since ` +
-      `v0.3.0; the substrate-side binding landed in phoenix Wave 2.5 ` +
-      `(commit f934956). If you see this on a current lightning binary, ` +
-      `the bolt manifest is missing the ` +
-      `\`capabilities.raindb.schedule: true\` opt-in. See ` +
-      `~/src/continuum/docs/work/RESEARCH_ACTIONS_SYSTEM_STATE.md §6.2 ` +
-      `for the design rationale.`,
+    `${BINDING.schedule} is not installed in this bolt runtime. Check the operation's availability and required capabilities. Scheduling requires capabilities.raindb.schedule: true.`,
     { binding: BINDING.schedule, input },
   );
 }
@@ -128,10 +90,7 @@ function missingSchedule(input: unknown): never {
  * call time and the eventual callback runs in a separate
  * invocation context.
  *
- * Wave 2.5 actions precursor. Substrate commit: f934956.
- * Substrate minimum: lightning built from main on or after the
- * Wave 2.5 merge.
- *
+ * Requires the scheduling binding and declared scheduling capability.
  * @example Schedule a deferred review-settlement callback
  * ```ts
  * import { schedule } from '@raindb/bolt-sdk';
@@ -151,14 +110,13 @@ export const schedule = {
    * event's S3 key (for future cancellation API; cancellation is
    * a v0.2 substrate follow-up).
    *
-   * LIVE since v0.3.0 (Wave 2.5; substrate commit f934956).
+   * LIVE since v0.3.0.
    *
    * @requires capability: bolt-level `schedule` (set
    *   `capabilities.raindb.schedule: true` in `bolt.json`)
    * @returns the scheduled event's S3 key string
    * @throws BindingNotInstalled when `ctx.schedule` is not
-   *   installed (pre-f934956 lightning binary OR missing manifest
-   *   opt-in)
+   *   installed in the runtime or the required capability is missing
    * @throws RainDBBoltError carrying the substrate's typed
    *   message on capability denial (the denial format does NOT
    *   match the formation-shape regex; see file header)

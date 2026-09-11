@@ -1,43 +1,4 @@
 // bindings/sql.ts -- typed wrapper for ctx.sql.query.
-//
-// LIVE since v0.2.0 -- substrate landed the native binding in
-// phoenix commit af5e9eb. The goja installer is in
-// `pkg/lightning/engines/goja/bindings.go::installSQLBinding`;
-// the SDK contract is the `SDKSQL` interface in
-// `pkg/lightning/runtime/engine.go` (~lines 632-700).
-//
-// Calling convention: the goja binding takes positional args
-// `(sql, [opts])` where opts is a plain JS object with
-// `{ formationId?, timeoutMs?, withFreshness? }`. The wrapper
-// preserves the named-args object surface bolts already expect
-// from the v0.1 stub (no breaking change to handler call-sites)
-// while threading the opts through to the native binding.
-//
-// Shape contract:
-//
-//   1. `SqlResult.rows` is `Array<Record<string, unknown>>` (named
-//      rows) -- each row is a column-keyed object, IDENTICAL to what
-//      the GraphQL `executeSQL` resolver returns (it zips the duckdb
-//      positional rows into `map[string]any` in sqlResultToGQL).
-//      ctx.sql.query and executeSQL are parity surfaces, so a bolt
-//      reads `row[column]` the same way on both. (An earlier SDK
-//      iteration typed this positional `unknown[][]` on the mistaken
-//      belief that executeSQL was positional too; the substrate has
-//      since been aligned so BOTH return named objects.)
-//
-//   2. `SqlFreshnessRow` (the entries of `SqlResult.latest`) mirrors the
-//      substrate's `FormationLatest` shape field-for-field: the seven bookmark
-//      fields plus the server-computed `freshnessStatus` verdict. It is
-//      populated LIVE when `withFreshness: true` -- the lightning executor
-//      builds it via the same shared `periscope.BuildFormationLatest` the
-//      GraphQL `executeSQL` resolver calls, so the two surfaces are byte
-//      parity. `latest` is present only when non-empty.
-//
-// Capability gate: bolt-level `sql-read` (declared as
-// `capabilities.raindb.sqlRead: true` in bolt.json). Distinct from
-// formation-level read because SQL queries span formations.
-//
-// Audit reference: §H (Gap 3).
 
 import { resolveCtx } from '../runtime/ctx-resolver.js';
 import { translateBindingError } from '../errors/from-binding.js';
@@ -64,20 +25,9 @@ const HARVEST_PAGE_SIZE = 200;
 const HARVEST_MAX_PAGES = 20;
 
 /**
- * Periscope query plan strategy for a single SQL query. Selects HOW the
- * answer-preserving read set is computed from the pinned snapshot:
- *
- * - `'range'` (the substrate default): manifest-summary reduction -- drops
- *   absorbed lower-tier manifests using the snapshot summaries alone.
- * - `'scan'`: native Iceberg file-level planning.
- *
- * Both strategies return IDENTICAL rows; they differ only in how the read set
- * is planned. Omit to use the formation's configured default
- * (`views.queryDefaults.planStrategy`, itself defaulting to `range`). The
- * substrate rejects any other value (empty string, `'standard'`, `'Scan'`,
- * `' scan'`) with a `bad_request`. LIVE on both engines since raindb-prime
- * commit 5fdd75fc (per-query override) and 507666a0 (range/scan selected by
- * planStrategy alone).
+ * Select how the formation's analytical files are planned: `range` or `scan`.
+ * Omission uses the formation's configured default, otherwise `range`.
+ * Invalid explicit values are rejected rather than replaced with a default.
  */
 export type PlanStrategy = 'range' | 'scan';
 
@@ -111,11 +61,9 @@ export interface SqlQueryInput {
   planStrategy?: PlanStrategy;
   /**
    * Ask the substrate to populate the result's `latest[]` freshness bookmark
-   * (one {@link SqlFreshnessRow} per formation the query touches). LIVE: the
-   * lightning SQL executor builds the bookmark via the same shared
-   * `periscope.BuildFormationLatest` the GraphQL `executeSQL` resolver uses, so
-   * `ctx.sql.query({ withFreshness: true })` returns the identical bookmark the
-   * `ctx.fetch->/graphql executeSQL` route does. Omit or pass `false` and
+   * (one {@link SqlFreshnessRow} per formation the query touches).
+   * The result follows the same freshness contract as GraphQL `executeSQL`.
+   * Omit or pass `false` and
    * `latest` is left off the result entirely.
    */
   withFreshness?: boolean;
@@ -277,13 +225,7 @@ export interface SqlBinding {
 /** Internal: shared "namespace missing" error producer. */
 function missingSql(input: unknown): never {
   throw new BindingNotInstalled(
-    `${BINDING.sql_query} requires ctx.sql which is not installed in ` +
-      `this bolt runtime. The @raindb/bolt-sdk wrapper is LIVE since ` +
-      `v0.2.0; the substrate-side binding landed in phoenix commit ` +
-      `af5e9eb. If you see this on a current lightning binary, ` +
-      `capabilities.raindb.sqlRead is likely not set to true. See ` +
-      `raindb-prime pkg/lightning/engines/goja/bindings.go ` +
-      `for the gap card that owns this surface.`,
+    `${BINDING.sql_query} is not installed in this bolt runtime. Check the operation's availability and required capabilities. SQL requires capabilities.raindb.sqlRead: true.`,
     { binding: BINDING.sql_query, input },
   );
 }
@@ -298,13 +240,13 @@ function missingSql(input: unknown): never {
  * rejection messages to {@link CapabilityDenied} via
  * `translateBindingError`.
  *
- * Audit §H (Gap 3). Substrate-side commit: af5e9eb.
+ * Requires the SQL binding and declared SQL capability.
  *
  * Cross-validation: matches @raindb/agent's `sql_execute` tool shape (sql
  * input; columns/rows/rowCount/durationMs/truncated output) AND the `latest[]`
  * freshness bookmark, including the server-computed `freshnessStatus` verdict
  * -- all three surfaces (GraphQL, this bolt binding, MCP) return the identical
- * bookmark from the one shared `periscope.BuildFormationLatest`.
+ * bookmark from the public freshness bookmark contract.
  */
 export const sql = {
   /**
@@ -317,7 +259,7 @@ export const sql = {
    * @throws CapabilityDenied when capabilities.raindb.sqlRead is
    *   not set to true
    * @throws BindingNotInstalled when running against a lightning
-   *   binary that pre-dates phoenix commit af5e9eb
+   *   runtime without this binding
    *
    * @example
    * ```ts
@@ -381,8 +323,7 @@ export const sql = {
    * Read-your-writes analytical ROW LIST: run an ENTITY-ROW SQL query, then merge
    * the not-yet-pooled tail so the result includes writes the columnar snapshot
    * has not rolled up yet. This is the one-call form of the freshness-merge every
-   * analytical bolt otherwise hand-rolls (see the production shape in crexp's
-   * server/index.js::runSQLFresh).
+   * analytical bolt can use to obtain an entity set.
    *
    * How it works: run {@link query} with `withFreshness: true`; for each formation
    * bookmark that {@link needsHarvest}, poll the by-update tail after the snapshot

@@ -1,9 +1,4 @@
 // bindings/stats.ts -- STUBBED ctx.stats.* surface.
-//
-// Per audit §V token+stats handoff doc. Four methods: increment,
-// set, batch, drain. The substrate-side stats binding is the
-// high-burst counter primitive built on `Client.Mutate`'s atomic
-// delta-op semantics.
 
 import { resolveCtx } from '../runtime/ctx-resolver.js';
 import { stubOrDispatch } from '../runtime/binding-not-installed.js';

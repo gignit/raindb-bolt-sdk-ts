@@ -1,10 +1,4 @@
 // bindings/iam.ts -- typed wrapper for ctx.iam.mintWireToken.
-//
-// LIVE binding (audit §B). Maps onto
-// `pkg/lightning/engines/goja/bindings.go::installIAMBinding`. Used
-// by SSE-streaming bolts to mint short-lived browser-direct grants
-// over chain-head wire keys (per Lightning SSE Phase 5,
-// docs/RAINDB_PHX_LIGHTNING_SSE.md J).
 
 import { resolveCtx } from '../runtime/ctx-resolver.js';
 import { translateBindingError } from '../errors/from-binding.js';
@@ -13,7 +7,6 @@ import { RainDBBoltError } from '../errors/classes.js';
 
 /**
  * One resource entry on a wire-token grant. Mirrors
- * `pkg/lightning/runtime/engine.go::WireTokenResource`.
  */
 export interface WireTokenResource {
   /** Always `"wire-key"` today; future verbs additive. */
@@ -26,7 +19,6 @@ export interface WireTokenResource {
 
 /**
  * Options for `iam.mintWireToken`. Mirrors
- * `pkg/lightning/runtime/engine.go::WireTokenMintOptions`.
  */
 export interface WireTokenMintOptions {
   /** End-user identity from the bolt's user table. */

@@ -1,36 +1,4 @@
 // agent-bridge/host.ts -- bolt-native AgentHost factory.
-//
-// Per handoff §I and audit §V.4, @raindb/agent v0.7+ runs inside a
-// Lightning Bolt without HTTP self-loops to /graphql. Substrate-
-// touching tool calls are intercepted at the host's `fetch` boundary
-// and dispatched through @raindb/bolt-sdk's native bindings. LLM
-// chatCompletion calls still go through ctx.fetch (those are
-// genuinely external).
-//
-// This module imports types from @raindb/agent (declared as an
-// OPTIONAL peer dep in package.json). Bolts that don't use the
-// bridge don't need @raindb/agent installed; they simply don't
-// import this submodule.
-//
-// Design constraint: when a substrate tool's binding is STUBBED
-// (substrate-side hasn't shipped it), the bridge falls through to
-// ctx.fetch -- the agent's tool then makes the GraphQL self-loop
-// it would otherwise have made. This is the graceful-degradation
-// path. The bridge logs a `bolt.agent-bridge.fallthrough` warning
-// per call so operators can see how often it triggers.
-
-// We import @raindb/agent's types lazily via dynamic interface
-// declarations so the package compiles even without @raindb/agent
-// in node_modules (the optional peer dep model). At runtime, callers
-// that import this module will get a clear "module not found" if
-// @raindb/agent isn't installed -- which is the right error.
-//
-// The two @raindb/agent types we depend on (AgentHost,
-// ChatCompletionRequest/Response) are documented in
-// ~/src/raindb-agent-ts/src/host/types.ts. We declare local
-// type interfaces matching that contract; if the contract drifts,
-// the structural assignment in makeBoltNativeHost's return value
-// stops compiling.
 
 import type { BoltContext } from '../types/bolt-context.js';
 import type { CursorPaginationOpts } from '../types/cursor.js';
@@ -100,7 +68,6 @@ interface ChatCompletionResponse {
 
 /**
  * Locally-declared shape of @raindb/agent's `AgentHost`. Mirror of
- * `~/src/raindb-agent-ts/src/host/types.ts::AgentHost`. Structural
  * compatibility means `makeBoltNativeHost(ctx)`'s return value can
  * be passed to `runAgent({ host: ... })` without a cast.
  */
@@ -450,7 +417,7 @@ async function tryRouteToNative(
  * Project a native listKeys page onto the GraphQL KeyPage wire shape for the
  * agent interception boundary. The ONLY transform is KeyEntry.lastModified:
  * the native binding emits an RFC3339 STRING (the intentional goja/pod host
- * boundary -- see the compat lock + prime 8f77cf15), but the GraphQL contract
+ * boundary -- see the compat lock + the documented public API), but the GraphQL contract
  * is Time! -- a Unix-MILLISECOND NUMBER (model.MarshalTime). Since this
  * intercepts a GraphQL operation and answers as GraphQL, a consumer decoding
  * the result must see the number, not the string. A malformed/empty native

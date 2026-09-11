@@ -1,13 +1,4 @@
 // bindings/token.ts -- STUBBED ctx.token.* surface.
-//
-// Per audit §V token+stats handoff doc and HANDOFF_RAINDB_TOKEN_BINDINGS.md.
-// Five methods: write, claim, read, delete, deleteAll. The substrate-
-// side agent is shipping these as v0.4 of the lightning runtime; the
-// package's stubs throw BindingNotInstalled until the swap.
-//
-// Cross-validation: shapes follow the substrate Go SDK
-// `Client.WriteToken/ClaimToken/ReadToken/DeleteToken/DeleteAllTokens`
-// in `pkg/sdk/token.go`.
 
 import { resolveCtx } from '../runtime/ctx-resolver.js';
 import { stubOrDispatch } from '../runtime/binding-not-installed.js';

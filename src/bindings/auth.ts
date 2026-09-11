@@ -1,38 +1,11 @@
 // bindings/auth.ts -- typed wrapper for ctx.auth.
-//
-// LIVE since v0.4.0 (substrate-side commit 7bf58b6 -- lightning
-// gains the same auth gate raindb-api's auth_middleware runs).
-//
-// Maps onto pkg/lightning/engines/goja/bindings.go::installAuthBinding
-// and pkg/lightning/runtime/engine.go::SDKAuth in the substrate.
-//
-// Architecture (the fused gate model):
-//
-//   (graphql)     auth_middleware -> ctx -> RequireResource
-//   (lightning)   resolveAuthContext -> ctx.auth -> ctx.auth.permits
-//
-// Same auth.GrantValidator, same auth.AuthContext shape, same
-// auth.ResourceGrant.Permits semantics. PROJECT_REQUIREMENTS \u00a72
-// library discipline: ONE Permits implementation; rule changes
-// happen in pkg/auth only.
-//
-// See ~/src/raindb-prime/internal/lightning (unified IAM gate; resolveAuthContext)
-// for the architecture decision + Phase plan.
 
 import { resolveCtx } from '../runtime/ctx-resolver.js';
 
 /**
- * Bolt-facing shape of `ctx.auth` -- the raw goja-installed
- * surface. Mirrors `pkg/lightning/runtime/engine.go::SDKAuth`.
- *
- * Scalar fields are PROPERTIES (set once at request boundary by
- * `installAuthBinding` from the validated `AuthContext`). They
- * never throw and never await.
- *
- * Predicates are FUNCTIONS that consult the AuthContext.Grant
- * via pkg/auth's `Permits` / `PermitsWireKeySubscribe`. Both
- * return synchronous booleans (no I/O, no allocation beyond the
- * resource-path split).
+ * Per-request authentication surface supplied by the RainDB runtime.
+ * Identity fields are synchronous properties. Permission predicates return
+ * synchronous booleans and evaluate the current actor's authorized access.
  */
 export interface AuthBinding {
   /**
@@ -41,8 +14,8 @@ export interface AuthBinding {
    * requests.
    *
    * IMPORTANT for portal-bolts: this is NOT the bolt's host
-   * tenant. fdn-app hosted on platform-bolts, serving Joshua
-   * on chess, sees tenantId === chess (Joshua's). The bolt's
+   * tenant. A portal serving a user from another tenant sees that user's
+   * tenant identity here. The bolt's
    * host tenant is on `ctx.bolt.tenantId` if you need it.
    */
   readonly tenantId: string;
@@ -81,8 +54,7 @@ export interface AuthBinding {
    * (resourceType, resourceID, op) tuple. Returns false for
    * anonymous callers, expired grants, and any miss.
    *
-   * SAME semantics as graphql's RequireResource directive and
-   * pkg/auth's ResourceGrant.Permits. Use this to gate
+   * Use the platform authorization result to gate
    * cross-tenant operations OR operations that should respect
    * the user's actual authorization (NOT the bolt's host
    * privileges).
@@ -188,8 +160,7 @@ export const auth = {
    * No-credential indicator. See AuthBinding.isAnonymous.
    *
    * Also true when running on older lightning binaries that
-   * predate the ctx.auth installation (substrate commit
-   * 7bf58b6); newer code SHOULD check isAnonymous OR
+   * do not provide ctx.auth; check isAnonymous OR
    * ctx.auth !== undefined to distinguish the two cases.
    */
   get isAnonymous(): boolean {
@@ -201,7 +172,7 @@ export const auth = {
   /**
    * Per-resource permission check. See AuthBinding.permits.
    *
-   * Pre-7bf58b6 lightning binaries don't install ctx.auth;
+   * When ctx.auth is unavailable,
    * this method returns false in that case (no AuthContext
    * means no permissions). Bolt code that targets the new
    * substrate should rely on the gate; older substrate

@@ -1,15 +1,4 @@
 // handlers/tag-roundtrip.ts -- exercises db.tag + db.untag (and the
-// ergonomic tags.* re-routes). LIVE since v0.3.0 (substrate
-// commit eee3eac).
-//
-// Demonstrates the additive-then-remove roundtrip:
-//   1. tag an entity with a starter tag set
-//   2. add more tags (additive semantics; existing tags survive)
-//   3. untag a subset (idempotent removal)
-//   4. invoke the STUB replaceTags to show graceful degradation
-//
-// Capability: bolt.json must declare `tag` op on the formation.
-// The example-bolt's `agent-graph` formation declares it.
 
 import {
   db,
@@ -92,7 +81,7 @@ export async function onTagRoundtrip(
         status: 501,
         body: {
           error: 'ctx.db.tag/untag not installed on this lightning binary',
-          hint: 'requires substrate >= phoenix commit eee3eac',
+          hint: 'requires a runtime providing this binding',
         },
       };
     }

@@ -1,18 +1,4 @@
 // handlers/expire-droplet.ts -- exercises db.expire + db.expirationDays.
-// LIVE since v0.3.0 (substrate commit eee3eac).
-//
-// Demonstrates the entity-level retention surface:
-//   1. read the tenant-wide retention window (db.expirationDays takes no args)
-//   2. flag a specific entity (formationId, scopeValue) for lifecycle deletion
-//
-// NOTE: the substrate SDK method is named ExpireDroplet but operates
-// at the ENTITY (scopeValue) level, NOT per-droplet. The v0.1 stub
-// shape had the parameter as `dropletId` -- that was incorrect. See
-// CHANGELOG v0.3.0 "Shape divergences from v0.1 stubs."
-//
-// Capability: bolt.json must declare `expire` op on the formation.
-// Expire is a SEPARATE op from `write` per audit §M -- a bolt with
-// write access does NOT implicitly get expire.
 
 import {
   db,
@@ -73,7 +59,7 @@ export async function onExpireDroplet(
         status: 501,
         body: {
           error: 'ctx.db.expire/expirationDays not installed',
-          hint: 'requires substrate >= phoenix commit eee3eac',
+          hint: 'requires a runtime providing this binding',
         },
       };
     }

@@ -1,12 +1,4 @@
 // types/token.ts -- token-shaped types for the STUBBED ctx.token surface.
-//
-// Per audit §V token+stats handoff doc and HANDOFF_RAINDB_TOKEN_BINDINGS.md.
-// The substrate side has not yet shipped this binding; the shapes
-// declared here are best-effort projections from the Go-side
-// SDK methods (Client.WriteToken, ClaimToken, ReadToken, DeleteToken,
-// DeleteAllTokens) and may shift slightly when the substrate-side
-// requirements card lands. When that happens, the package bumps
-// minor version per handoff §N.
 
 /**
  * One token droplet. Tokens are the substrate's

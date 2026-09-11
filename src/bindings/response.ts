@@ -1,18 +1,4 @@
 // bindings/response.ts -- typed wrapper for ctx.response.{write,setHeader,beginStream}.
-//
-// LIVE binding (audit §B; SSE Phase 8).
-// Maps onto
-// `pkg/lightning/engines/goja/bindings.go::installResponseBinding`.
-//
-// The binding is present ONLY when the dispatcher passed a
-// StreamingWriter on this invocation -- i.e. the bolt declared
-// `streaming: true` on its route. For non-streaming handlers,
-// ctx.response is undefined and this wrapper's calls fail with a
-// clear "streaming not enabled" message.
-//
-// Headers MUST be set BEFORE the first write. The substrate
-// commits status + headers on the first byte to wire; calling
-// setHeader after a write panics on the goja side.
 
 import { resolveCtx } from '../runtime/ctx-resolver.js';
 import { translateBindingError } from '../errors/from-binding.js';

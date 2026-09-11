@@ -1,31 +1,4 @@
 // bindings/objects.ts -- typed wrapper for ctx.objects.*.
-//
-// LIVE since v0.2.0 -- substrate landed the native binding in
-// phoenix commit af5e9eb (merged to main as part of
-// architect/wave-1-merge). The goja installer is in
-// `pkg/lightning/engines/goja/bindings.go::installObjectsBinding`;
-// the SDK contract is the `SDKObjects` interface in
-// `pkg/lightning/runtime/engine.go` (~lines 706-729).
-//
-// Calling convention: the goja binding takes positional args
-// `(bucket, key, [data, contentType])`. The wrapper exposes the
-// same positional signature (rather than a named-args object) to
-// stay close to S3-shaped vocabulary. Capability gating happens
-// in the substrate at op `object-read` (get/exists) and
-// `object-write` (put/delete); capability denials translate to
-// {@link CapabilityDenied} via `translateBindingError`.
-//
-// Substrate-side bytes are surfaced as a JS string per the goja
-// installer (the goja runtime does not expose a native Uint8Array
-// conversion). The wrapper types `get` as `Promise<string>` --
-// Uint8Array return is deferred to a follow-up substrate cut.
-//
-// Backwards compatibility: bolts running against an OLDER lightning
-// binary (pre-af5e9eb) get a clean {@link BindingNotInstalled} from
-// the guard at the top of each method, rather than a cryptic
-// undefined-deref.
-//
-// Audit reference: §F (Gap 1).
 
 import { resolveCtx } from '../runtime/ctx-resolver.js';
 import { translateBindingError } from '../errors/from-binding.js';
@@ -65,13 +38,7 @@ export interface ObjectsBinding {
 /** Internal: shared "namespace missing" error producer. */
 function missingObjects(binding: string, input: unknown): never {
   throw new BindingNotInstalled(
-    `${binding} requires ctx.objects which is not installed in this ` +
-      `bolt runtime. The @raindb/bolt-sdk wrapper is LIVE since v0.2.0; ` +
-      `the substrate-side binding landed in phoenix commit af5e9eb. ` +
-      `If you see this on a current lightning binary, capabilities.json ` +
-      `is likely missing a buckets[] declaration. See ` +
-      `raindb-prime pkg/lightning/engines/goja/bindings.go ` +
-      `for the gap card that owns this surface.`,
+    `${binding} is not installed in this bolt runtime. Check the operation's availability and required capabilities.`,
     { binding, input },
   );
 }
@@ -85,9 +52,7 @@ function missingObjects(binding: string, input: unknown): never {
  * substrate enforces; the wrapper translates rejection messages
  * to {@link CapabilityDenied} via `translateBindingError`.
  *
- * Audit §F (Gap 1). Substrate-side commit: af5e9eb. Substrate
- * minimum: any lightning binary built from main on or after the
- * Wave 1 merge.
+ * Requires the object bindings and declared bucket capabilities.
  */
 export const objects = {
   /**
@@ -99,13 +64,11 @@ export const objects = {
    * @returns the object bytes as a string. Bolts that need the
    *   raw byte view can call `new TextEncoder().encode(s)` or
    *   `Buffer.from(s, 'binary')` on the result. Uint8Array return
-   *   is deferred to a follow-up substrate version (the goja
-   *   installer surfaces bytes as string in Tier 1 -- see
-   *   `installObjectsBinding` in bindings.go).
+   *   is not provided by this result type.
    * @throws CapabilityDenied when the bolt's capabilities.json
    *   does not declare `object-read` on the bucket
    * @throws BindingNotInstalled when running against a lightning
-   *   binary that pre-dates phoenix commit af5e9eb
+   *   runtime without this binding
    *
    * @example
    * ```ts

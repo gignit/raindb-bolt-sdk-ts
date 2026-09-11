@@ -1,9 +1,4 @@
 // bindings/secrets.ts -- typed wrapper for ctx.secrets.get.
-//
-// LIVE binding (audit §B). Maps onto
-// `pkg/lightning/engines/goja/bindings.go::installSecretsBinding`.
-// The goja-side reads from pkg/secrets.KeyManager; names are gated
-// by the manifest's capabilities.raindb.secrets.names.
 
 import { resolveCtx } from '../runtime/ctx-resolver.js';
 import { translateBindingError } from '../errors/from-binding.js';

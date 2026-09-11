@@ -1,27 +1,12 @@
-// internal/constants.ts -- single source location for every binding
-// name string the package emits.
-//
-// Per handoff doc §K cross-cutting reference (which points back at
-// PROJECT_REQUIREMENTS §3 in raindb-prime): no scattered
-// magic strings. Every wrapper that names its binding for error
-// translation, log tagging, or stub dispatch references one of these
-// constants. When the substrate-side agent renames a binding (rare;
-// the contract is supposed to be stable) the change lands here once
-// and propagates everywhere.
-//
-// This file is INTERNAL -- not exported from the package's public
-// surface. Consumers don't need to see binding names; they discover
-// them through error.binding fields and JSDoc.
+// internal/constants.ts -- canonical SDK binding names.
 
 /**
  * Binding name string used in error.binding and stub-not-installed
- * messages. Format: `ctx.<namespace>.<method>` -- mirrors the goja
- * sandbox's installer naming so log lines from the package can be
- * cross-referenced against host-side log lines emitted by
- * `pkg/lightning/engines/goja/bindings.go`.
+ * messages. Format: `ctx.<namespace>.<method>`. Use these names to identify
+ * the operation in SDK errors.
  */
 export const BINDING = {
-  // === LIVE bindings (per audit §B and bindings.go) ===
+  // === LIVE bindings (per audit §B and the public SDK reference) ===
   log_info: 'ctx.log.info',
   log_warn: 'ctx.log.warn',
   log_error: 'ctx.log.error',
@@ -49,7 +34,7 @@ export const BINDING = {
 
   iam_mintWireToken: 'ctx.iam.mintWireToken',
 
-  // === ctx.auth -- LIVE since v0.4.0 (substrate commit 7bf58b6) ===
+  // === ctx.auth -- LIVE since v0.4.0 ===
   //
   // The auth namespace exposes the per-request AuthContext that the
   // lightning dispatcher resolved by running the SAME GrantValidator
@@ -100,15 +85,8 @@ export const BINDING = {
 
   // === ctx.db.mutate / mutateAndRead / writeToken -- LIVE ===
   //
-  // Atomic token read-modify-write (mutate / mutateAndRead) + token
-  // write (writeToken). The substrate installs these on ctx.db in
-  // pkg/lightning/engines/goja/bindings.go::installDBBinding and
-  // enforces the per-formation capability gate host-side: OpMutate
-  // ("mutate") for mutate/mutateAndRead, OpTokenWrite ("token-write")
-  // for writeToken. mutateAndRead is the subtract-a-counter-and-read-
-  // the-remaining-value primitive (backed by Client.MutateAndRead +
-  // storage.JSONOpWindowIncrement -- the same passive-window-reset
-  // mechanism pkg/sdk/fleet_ratelimit.go uses, no cron required).
+  // Token mutations require the formation's mutate capability;
+  // token writes require token-write.
   db_mutate: 'ctx.db.mutate',
   db_mutateAndRead: 'ctx.db.mutateAndRead',
   db_writeToken: 'ctx.db.writeToken',
@@ -161,7 +139,7 @@ export const BINDING = {
 
   flows_queryState: 'ctx.flows.queryState',
 
-  // === LIVE since v0.3.0 (substrate Wave 2.5 commit f934956) ===
+  // === LIVE since v0.3.0 ===
   //
   // `ctx.schedule` is bolt-level (not formation-scoped); capability
   // gate is the manifest's `capabilities.raindb.schedule: true`
