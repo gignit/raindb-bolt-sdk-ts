@@ -576,18 +576,26 @@ export const sql = {
           if (d.payload) late.push(d.payload);
         }
         // Terminate ONLY on a real end-of-index signal: no more pages. An empty
-        // page with hasMore:true is a transient gap, NOT "caught up" -- continue
+        // page with hasMore:true may contain skipped expired entities -- continue
         // (the old code broke here on droplets.length===0 and returned stale).
-        if (!page.hasMore || !page.nextCursor) {
+        // hasMore is the producer's availability signal.
+        // A resume cursor can also accompany the FINAL page,
+        // including positions whose expired entities were skipped. It is
+        // coverage evidence, not a replacement for the hasMore signal.
+        if (typeof page.nextCursor === 'string' && page.nextCursor > maxSeen) {
+          maxSeen = page.nextCursor;
+        }
+        if (page.hasMore === false) {
           exhausted = true;
           break;
         }
-        if (page.nextCursor === cursor) {
+        if (page.hasMore !== true || typeof page.nextCursor !== 'string' ||
+            page.nextCursor.length === 0 || page.nextCursor === cursor) {
           // No forward progress but hasMore is still set: the walk is stuck.
           // Fail loud rather than loop or accept an incomplete tail (PR 5.3).
           throw new RainDBBoltError(
             `sql.queryEntityRowsFresh: ${bm.formationId} tail cursor did not ` +
-              `advance (${cursor}); cannot prove freshness coverage.`,
+              `advance (${cursor}) with a valid hasMore signal; cannot prove freshness coverage.`,
             { binding: 'ctx.sql.queryEntityRowsFresh', input: { formationId: bm.formationId } },
           );
         }
