@@ -38,6 +38,7 @@ import { db } from '../bindings/db.js';
 import { sql } from '../bindings/sql.js';
 import type { SqlQueryInput, PlanStrategy } from '../bindings/sql.js';
 import type { KeyPage } from '../types/droplet.js';
+import { RainDBBoltError } from '../errors/classes.js';
 import { setCtx } from '../runtime/ctx-resolver.js';
 
 // ---------------------------------------------------------------------
@@ -452,8 +453,10 @@ async function tryRouteToNative(
  * boundary -- see the compat lock + prime 8f77cf15), but the GraphQL contract
  * is Time! -- a Unix-MILLISECOND NUMBER (model.MarshalTime). Since this
  * intercepts a GraphQL operation and answers as GraphQL, a consumer decoding
- * the result must see the number, not the string. A malformed/empty timestamp
- * becomes null (never a silent 0). Every other field passes through unchanged.
+ * the result must see the number, not the string. A malformed/empty native
+ * timestamp is REJECTED (throws) -- Time! is non-null, so emitting null would be
+ * successful-shaped data that violates the contract (PR 5.3); a legitimate
+ * epoch-0 parses to the finite number 0. Every other field passes through.
  * NOTE: this does NOT change the native ctx.db.listKeys binding's shape -- that
  * stays a string; only the GraphQL-answering agent path converts.
  */
@@ -461,7 +464,7 @@ function keyPageToGraphQL(page: KeyPage): {
   keys: Array<{
     key: string;
     size: number;
-    lastModified: number | null;
+    lastModified: number;
     etag?: string;
   }>;
   nextCursor?: string | null;
@@ -469,16 +472,31 @@ function keyPageToGraphQL(page: KeyPage): {
   totalCount: number;
 } {
   const keys = page.keys.map((k) => {
-    const ms = k.lastModified ? Date.parse(k.lastModified) : NaN;
+    // The GraphQL KeyEntry.lastModified is Time! (NON-NULL, a Unix-ms number).
+    // A native timestamp that does not parse to a finite instant cannot be
+    // projected onto that wire shape. Per PR 5.3 (deterministic success OR
+    // explicit failure), REJECT it -- do NOT fabricate `null`, which would be
+    // successful GraphQL-shaped data violating the non-null contract, nor `0`,
+    // which would be a wrong instant. A legitimate epoch-0 ('1970-01-01T...')
+    // parses to a finite 0 and passes through as the number 0.
+    const ms = Date.parse(k.lastModified);
+    if (!Number.isFinite(ms)) {
+      throw new RainDBBoltError(
+        `listKeys: native lastModified ${JSON.stringify(k.lastModified)} for key ` +
+          `${JSON.stringify(k.key)} is not a valid timestamp; cannot project onto ` +
+          `the non-null GraphQL Time! contract.`,
+        { binding: 'ctx.db.listKeys', input: { key: k.key, lastModified: k.lastModified } },
+      );
+    }
     const entry: {
       key: string;
       size: number;
-      lastModified: number | null;
+      lastModified: number;
       etag?: string;
     } = {
       key: k.key,
       size: k.size,
-      lastModified: Number.isFinite(ms) ? ms : null,
+      lastModified: ms,
     };
     if (k.etag !== undefined) entry.etag = k.etag;
     return entry;

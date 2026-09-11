@@ -355,45 +355,74 @@ test('agent-bridge listKeys FALLS THROUGH to GraphQL when maxKeys is supplied (n
   assert.equal(ctxFetchCalled, true, 'must fall through to the GraphQL route that honors maxKeys');
 });
 
-test('agent-bridge listKeys projects native RFC3339 lastModified to the GraphQL Time number', async () => {
-  // The native KeyEntry.lastModified is an RFC3339 STRING; the GraphQL contract
-  // is Time! (Unix-ms NUMBER). Intercepting a GraphQL op must return the number,
-  // not the native string (R2). Malformed -> null, never a silent 0.
-  const iso = '2026-09-10T00:00:00.000Z';
-  const expectedMs = Date.parse(iso);
+function listKeysHostCtx(entries: Array<{ key: string; size: number; lastModified: string; etag?: string }>) {
   const ctx = mockCtx({
     db: {
       readLatest: async () => null,
       readDroplet: async () => null,
       writeDroplet: async () => ({ dropletId: 'x' }),
       listDroplets: async () => ({ droplets: [], hasMore: false }),
-      listKeys: async () => ({
-        keys: [
-          { key: 'k1', size: 10, lastModified: iso, etag: 'e1' },
-          { key: 'k2', size: 20, lastModified: '' },
-        ],
-        nextCursor: null,
-        hasMore: false,
-        totalCount: 2,
-      }),
+      listKeys: async () => ({ keys: entries, nextCursor: null, hasMore: false, totalCount: entries.length }),
     },
   });
   setCtx(ctx);
+  return ctx;
+}
 
+async function runListKeys(ctx: ReturnType<typeof mockCtx>) {
   const host = makeBoltNativeHost(ctx);
-  const resp = await host.fetch('http://localhost:8080/graphql', {
+  return host.fetch('http://localhost:8080/graphql', {
     method: 'POST',
     body: JSON.stringify({
       query: 'query ListKeys($input: ListKeysInput!) { listKeys(input: $input) { keys { key lastModified } } }',
       variables: { input: { formationId: 'notes', indexId: 'by-id-latest', first: 10 } },
     }),
   });
+}
+
+test('agent-bridge listKeys projects a valid RFC3339 lastModified to the GraphQL Time number', async () => {
+  // The native KeyEntry.lastModified is an RFC3339 STRING; the GraphQL contract
+  // is Time! (a Unix-ms NUMBER). A VALID timestamp must convert to the number.
+  const iso = '2026-09-10T00:00:00.000Z';
+  const ctx = listKeysHostCtx([{ key: 'k1', size: 10, lastModified: iso, etag: 'e1' }]);
+  const resp = await runListKeys(ctx);
   const body = (await resp.json()) as {
-    data: { listKeys: { keys: Array<{ key: string; lastModified: number | null; etag?: string }> } };
+    data: { listKeys: { keys: Array<{ key: string; lastModified: number; etag?: string }> } };
   };
   const keys = body.data.listKeys.keys;
-  assert.equal(keys[0]?.lastModified, expectedMs, 'RFC3339 string -> Unix-ms number');
+  assert.equal(keys[0]?.lastModified, Date.parse(iso), 'RFC3339 string -> Unix-ms number');
   assert.equal(typeof keys[0]?.lastModified, 'number');
   assert.equal(keys[0]?.etag, 'e1', 'etag preserved');
-  assert.equal(keys[1]?.lastModified, null, 'empty timestamp -> null, not 0');
+});
+
+test('agent-bridge listKeys converts explicit epoch-zero to the number 0 (not null/reject)', async () => {
+  // A legitimate epoch-0 timestamp is a VALID Time! value; it must become the
+  // number 0, never null and never a rejection.
+  const ctx = listKeysHostCtx([{ key: 'k0', size: 5, lastModified: '1970-01-01T00:00:00.000Z' }]);
+  const resp = await runListKeys(ctx);
+  const body = (await resp.json()) as { data: { listKeys: { keys: Array<{ lastModified: number }> } } };
+  assert.equal(body.data.listKeys.keys[0]?.lastModified, 0, 'epoch 0 -> number 0');
+  assert.equal(typeof body.data.listKeys.keys[0]?.lastModified, 'number');
+});
+
+test('agent-bridge listKeys REJECTS an empty native lastModified (Time! is non-null; no null data)', async () => {
+  // Follow-up A: GraphQL KeyEntry.lastModified is Time! (non-null). Emitting
+  // lastModified: null for an unparseable native timestamp produces successful
+  // GraphQL-shaped data that VIOLATES the non-null wire contract (PR 5.3). The
+  // adapter must reject explicitly instead of fabricating null.
+  const ctx = listKeysHostCtx([{ key: 'k2', size: 20, lastModified: '' }]);
+  await assert.rejects(
+    () => runListKeys(ctx),
+    (err: Error) => /lastModified|timestamp|Time/i.test(err.message),
+    'empty native timestamp must reject, not emit null',
+  );
+});
+
+test('agent-bridge listKeys REJECTS a malformed native lastModified (no null data)', async () => {
+  const ctx = listKeysHostCtx([{ key: 'k3', size: 30, lastModified: 'not-a-timestamp' }]);
+  await assert.rejects(
+    () => runListKeys(ctx),
+    (err: Error) => /lastModified|timestamp|Time/i.test(err.message),
+    'malformed native timestamp must reject, not emit null',
+  );
 });
