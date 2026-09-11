@@ -1084,5 +1084,5 @@ not require marketplace source repositories or platform administrator tools.
 
 ## License
 
-Internal (private package). Public license TBD when the package goes
-public.
+License terms are to be specified by the package owner. The SDK is intended
+for RainDB application authors; this document does not grant a license.
