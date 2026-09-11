@@ -407,12 +407,10 @@ export const sql = {
    *     write order, not the query's sort);
    *   - a LIMIT is NOT re-applied, so the merged result can exceed it.
    * Correctly reconciling predicate/sort/limit over an eventually-consistent
-   * snapshot is a PLATFORM concern (the bounded `CURRENT_BOUNDED` mode in
-   * raindb-prime docs/followup/bounded-current-row-query.md, still OPEN); this
-   * helper is a best-effort entity-set freshen, NOT that operation, and it does
-   * NOT parse SQL. Use it for an unordered/unfiltered "did my writes land" set;
+   * snapshot is not supported by this helper. It merges an entity set without
+   * parsing SQL. Use it for an unordered/unfiltered "did my writes land" set;
    * for ordered/filtered/limited current lists, sort+filter+slice the result
-   * yourself over stable columns, or await the platform bounded-current mode.
+   * yourself over stable columns.
    *
    * FAIL-LOUD: this THROWS -- never silently returns the stale snapshot (a method
    * named `*Fresh` must not hand back stale data) -- when it cannot PROVE the
@@ -433,7 +431,7 @@ export const sql = {
    * It returns the base snapshot ONLY when a bookmark set is present and every
    * bookmark is genuinely CURRENT (there is nothing to harvest). The watermark
    * droplet itself need not appear in the tail: an expired/purged entity is a
-   * tombstone that listSince skips (raindb-prime 48c55e55), so completeness is
+   * tombstone that listSince skips during listing, so completeness is
    * proven by CURSOR coverage + clean end-of-index, not droplet presence.
    *
    * @param input.scopeKey the entity-identity column both the SQL rows and the late
@@ -529,13 +527,13 @@ export const sql = {
           { binding: 'ctx.sql.queryEntityRowsFresh', input: { formationId: bm.formationId } },
         );
       }
-      // dropletIds are UUIDv7 -- lexicographic compare is chronological (see
-      // raindb-prime pkg/periscope/latest.go). The by-update tail is ASC, so we
+      // dropletIds are UUIDv7 -- lexicographic compare is chronological.
+      // The by-update tail is ASC, so we
       // track the max dropletId observed and consider the harvest "caught up"
       // when the walk cleanly exhausts the index AND the cursor has advanced to
       // >= the current watermark. The watermark droplet itself may legitimately
       // NOT appear in the tail (its entity can be an expired/purged tombstone,
-      // which listSince skips -- raindb-prime 48c55e55), so completeness is
+      // which listSince skips), so completeness is
       // proven by CURSOR coverage + clean exhaustion, not droplet presence.
       let cursor = bm.snapshotDropletId;
       let maxSeen = bm.snapshotDropletId;

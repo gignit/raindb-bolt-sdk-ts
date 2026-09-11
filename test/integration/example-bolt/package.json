@@ -6,8 +6,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "typecheck": "tsc --noEmit",
-    "test:e2e": "node --import tsx --test --test-reporter=spec test/e2e.test.ts"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@raindb/bolt-sdk": "file:../../.."

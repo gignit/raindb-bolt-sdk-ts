@@ -1112,13 +1112,14 @@ npm run build       # produces dist/
 npm pack            # produces a tarball with dist/, README.md, CHANGELOG.md only
 ```
 
-The `test/integration/example-bolt/` directory is the canonical
-"smallest complete bolt using @raindb/bolt-sdk" reference. It
-compiles cleanly under the same TypeScript strictness the package
-uses (`exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`, full
-strict mode). To run its e2e suite against devz, set
-`RAINDB_DEVZ_PROFILE=<profile-name>` and run `npm run test:e2e` from
-the bolt's directory; without that env var the suite skips cleanly.
+Local unit and shape tests use an in-memory context and declared dependencies.
+They require no private platform source, operator profile, or deployed fixture.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the standalone checks.
+
+`test/integration/example-bolt/` contains example application source. Run its
+own `npm run typecheck` separately; the root lint command covers SDK source and
+unit tests. It is not a deployed integration suite. Running the example requires
+your own tenant configuration and capabilities.
 
 ---
 
