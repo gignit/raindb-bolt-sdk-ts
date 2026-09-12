@@ -372,7 +372,24 @@ async function tryRouteToNative(
         // than the JS silently discarding the explicit choice.
         sqlInput.planStrategy = input['planStrategy'] as PlanStrategy;
       }
-      sqlInput.withFreshness = input['withFreshness'] === true;
+      // Freshness: request the `latest` bookmark ONLY when a formationId hint is
+      // present, because (a) that matches what the @raindb/agent sql_execute
+      // tool actually consumes -- it offers the model the freshness/harvest
+      // signal only for a formation-scoped query and returns no freshness guidance
+      // for an unscoped ad-hoc query -- and (b) assembling the bookmark costs real
+      // reads (the droplet-tier cursor + the formation's meta latest pointer), so
+      // requesting it on every unscoped query would add hops the caller never
+      // reads. A formationId-scoped query is exactly the case that both wants the
+      // bookmark and resolves the formation the native executor needs to build it.
+      // The native binding has no `withFreshness` field on the wire contract, so
+      // an explicit one can still arrive in the untyped GraphQL variables -- honor
+      // it verbatim (forward as given) so a caller can force the bookmark off even
+      // with a formationId, or on without one.
+      if (typeof input['withFreshness'] === 'boolean') {
+        sqlInput.withFreshness = input['withFreshness'];
+      } else if (sqlInput.formationId !== undefined) {
+        sqlInput.withFreshness = true;
+      }
       const out = await sql.query(sqlInput);
       return { data: { executeSQL: out } };
     }

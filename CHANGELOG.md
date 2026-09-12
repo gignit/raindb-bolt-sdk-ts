@@ -6,6 +6,14 @@ and the capabilities documented for the operation.
 
 ## Unreleased
 
+- Return the SQL `latest` freshness bookmark from the agent bridge's
+  intercepted `executeSQL` for a formation-scoped query, matching the bookmark a
+  formation-scoped query returns over the GraphQL surface, so an agent tool call
+  resolves identically whether it routes through the in-bolt native bridge or a
+  direct GraphQL host. The bookmark is requested ONLY when a formation is in
+  scope -- it is not assembled for an unscoped ad-hoc query, so an unscoped query
+  adds no extra reads. An explicit freshness request in the query variables is
+  still honored as given.
 - Update development tooling to TypeScript 7.0.2, tsx 4.23.13, and Node type
   declarations 22.20.2 in the SDK and example. Explicitly load Node declarations
   for TypeScript 7's new ambient-type defaults; retain the ES2022 output target.

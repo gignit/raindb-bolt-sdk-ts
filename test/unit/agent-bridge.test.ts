@@ -339,6 +339,116 @@ test('agent-bridge routes executeSQL natively', async () => {
   assert.equal(body.data.executeSQL.rowCount, 1);
 });
 
+test('agent-bridge executeSQL requests freshness when a formationId is present', async () => {
+  // The sql_execute tool offers the model the freshness/harvest signal for a
+  // formation-scoped query, and the GraphQL surface returns SQLResult.latest[]
+  // for one. The native ctx.sql.query binding gates the bookmark on an explicit
+  // withFreshness opt (absent from the GraphQL variables), so the bridge turns
+  // it on for a formation-scoped query to return the same latest[] a caller gets
+  // on the Node/GraphQL host -- and ONLY then, since the bookmark costs reads.
+  let capturedOpts: Record<string, unknown> | undefined;
+  const ctx = mockCtx({
+    db: { ...dbBase },
+    sql: {
+      query: async (q: string, opts?: Record<string, unknown>) => {
+        capturedOpts = opts;
+        return {
+          columns: ['n'],
+          rows: [{ n: 1 }],
+          rowCount: 1,
+          durationMs: 1,
+          truncated: false,
+          latest: [
+            {
+              formationId: 'orders',
+              snapshotDropletId: 'd1',
+              snapshotKey: 'k1',
+              currentDropletId: 'd1',
+              currentKey: 'k1',
+              indexPrefix: 'indexes/orders/by-update/',
+              freshnessStatus: 'CURRENT',
+            },
+          ],
+        };
+      },
+    },
+  });
+  setCtx(ctx);
+
+  const host = makeBoltNativeHost(ctx);
+  const resp = await host.fetch('http://localhost:8080/graphql', {
+    method: 'POST',
+    body: JSON.stringify({
+      query: 'query ExecuteSQL($input: ExecuteSQLInput!) { executeSQL(input: $input) { rowCount latest { freshnessStatus } } }',
+      variables: { input: { sql: 'SELECT 1 AS n', formationId: 'orders' } },
+    }),
+  });
+  assert.equal(capturedOpts?.['formationId'], 'orders');
+  assert.equal(capturedOpts?.['withFreshness'], true);
+  const body = (await resp.json()) as {
+    data: { executeSQL: { latest?: Array<{ freshnessStatus: string }> } };
+  };
+  assert.equal(body.data.executeSQL.latest?.[0]?.freshnessStatus, 'CURRENT');
+});
+
+test('agent-bridge executeSQL does NOT request freshness for an unscoped query (no extra reads)', async () => {
+  // Assembling the freshness bookmark costs real reads (the droplet-tier cursor
+  // + the formation meta latest pointer). An unscoped query has no formationId,
+  // and the sql_execute tool offers the model no freshness/harvest guidance for
+  // an unscoped query, so the bridge must NOT request the bookmark -- it would
+  // add hops the caller never reads. withFreshness stays unset (the native
+  // default: no bookmark).
+  let capturedOpts: Record<string, unknown> | undefined;
+  const ctx = mockCtx({
+    db: { ...dbBase },
+    sql: {
+      query: async (_q: string, opts?: Record<string, unknown>) => {
+        capturedOpts = opts;
+        return { columns: ['n'], rows: [{ n: 1 }], rowCount: 1, durationMs: 1, truncated: false };
+      },
+    },
+  });
+  setCtx(ctx);
+
+  const host = makeBoltNativeHost(ctx);
+  await host.fetch('http://localhost:8080/graphql', {
+    method: 'POST',
+    body: JSON.stringify({
+      query: 'query ExecuteSQL($input: ExecuteSQLInput!) { executeSQL(input: $input) { rowCount } }',
+      variables: { input: { sql: 'SELECT count(*) AS n FROM entity."orders"' } },
+    }),
+  });
+  assert.equal(capturedOpts?.['formationId'], undefined);
+  assert.equal(capturedOpts?.['withFreshness'], undefined);
+});
+
+test('agent-bridge executeSQL honors an explicit withFreshness=false even with a formationId', async () => {
+  // An explicit withFreshness in the variables wins over the formationId
+  // default -- a caller that opts out stays opted out.
+  let capturedOpts: Record<string, unknown> | undefined;
+  const ctx = mockCtx({
+    db: { ...dbBase },
+    sql: {
+      query: async (_q: string, opts?: Record<string, unknown>) => {
+        capturedOpts = opts;
+        return { columns: ['n'], rows: [{ n: 1 }], rowCount: 1, durationMs: 1, truncated: false };
+      },
+    },
+  });
+  setCtx(ctx);
+
+  const host = makeBoltNativeHost(ctx);
+  await host.fetch('http://localhost:8080/graphql', {
+    method: 'POST',
+    body: JSON.stringify({
+      query: 'query ExecuteSQL($input: ExecuteSQLInput!) { executeSQL(input: $input) { rowCount } }',
+      variables: { input: { sql: 'SELECT 1 AS n', formationId: 'orders', withFreshness: false } },
+    }),
+  });
+  assert.equal(capturedOpts?.['formationId'], 'orders');
+  assert.equal(capturedOpts?.['withFreshness'], false);
+});
+
 test('agent-bridge log surface delegates to ctx.log', () => {
   const events: string[] = [];
   const ctx = mockCtx({
